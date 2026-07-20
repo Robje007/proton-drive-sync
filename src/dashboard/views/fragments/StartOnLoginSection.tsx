@@ -3,9 +3,41 @@ import { Icon } from './Icon.js';
 
 type Props = {
   enabled: boolean;
+  managedByDocker?: boolean;
 };
 
-export const StartOnLoginSection: FC<Props> = ({ enabled }) => {
+export const StartOnLoginSection: FC<Props> = ({ enabled, managedByDocker = false }) => {
+  if (managedByDocker) {
+    return (
+      <div
+        id="start-on-login-section"
+        data-runtime="docker"
+        class="flex min-h-[104px] items-center rounded-xl border border-emerald-400/20 bg-emerald-400/5 p-6"
+      >
+        <div class="flex w-full items-center justify-between gap-5">
+          <div class="flex min-w-0 items-start gap-3">
+            <span class="mt-0.5 rounded-lg bg-emerald-400/10 p-2 text-emerald-300">
+              <Icon name="rocket" class="h-4 w-4" />
+            </span>
+            <div>
+              <h3 class="text-base font-semibold text-white">Start with NAS</h3>
+              <p class="mt-1 text-xs leading-5 text-slate-400">
+                Managed by Docker Compose. Keep{' '}
+                <code class="rounded bg-slate-950/60 px-1.5 py-0.5 text-emerald-200">
+                  restart: unless-stopped
+                </code>{' '}
+                in your YAML.
+              </p>
+            </div>
+          </div>
+          <span class="shrink-0 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1.5 text-xs font-semibold text-emerald-300">
+            Docker managed
+          </span>
+        </div>
+      </div>
+    );
+  }
+
   const bgClass = enabled ? 'bg-proton' : 'bg-gray-600';
   const knobClass = enabled ? 'translate-x-6' : 'translate-x-1';
   const ariaChecked = enabled ? 'true' : 'false';

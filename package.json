@@ -1,6 +1,6 @@
 {
   "name": "proton-drive-sync",
-  "version": "0.3.0-nas.3",
+  "version": "0.3.0-nas.4",
   "description": "NAS-focused one-way backup to Proton Drive",
   "type": "module",
   "bin": {
