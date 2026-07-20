@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   check-and-tag:
@@ -56,10 +57,13 @@ jobs:
 
       - name: Create and push tag
         if: steps.version.outputs.changed == 'true' && steps.tag_check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           TAG_NAME="v${{ steps.version.outputs.current }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag -a "$TAG_NAME" -m "Release $TAG_NAME"
           git push origin "$TAG_NAME"
+          gh workflow run docker.yml --ref "$TAG_NAME"
           echo "Created and pushed tag: $TAG_NAME"
