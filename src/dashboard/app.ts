@@ -28,6 +28,7 @@ import { sendSignal } from '../signals.js';
 import { logger, enableIpcLogging } from '../logger.js';
 import { chownToEffectiveUser } from '../paths.js';
 import { CONFIG_FILE, CONFIG_CHECK_SIGNAL, defaultConfig } from '../config.js';
+import { isDocker } from '../environment.js';
 import { ProtonAuth, initCrypto } from '../auth.js';
 import { storeCredentials } from '../keychain.js';
 import type { ApiError } from '../proton/types.js';
@@ -811,7 +812,7 @@ app.get('/controls', async (c) => {
   const serviceEnabled = hasFlag(FLAGS.SERVICE_LOADED);
   content = content.replace(
     '{{START_ON_LOGIN_SECTION}}',
-    StartOnLoginSection({ enabled: serviceEnabled })!.toString()
+    StartOnLoginSection({ enabled: serviceEnabled, managedByDocker: isDocker() })!.toString()
   );
 
   // Server-side render sync concurrency and directories
@@ -957,6 +958,18 @@ app.get('/api/complete-onboarding-controls-force', (c) => {
 
 /** Toggle service start-on-login */
 app.post('/api/toggle-service', (c) => {
+  if (isDocker()) {
+    return c.html(StartOnLoginSection({ enabled: true, managedByDocker: true })!.toString(), 200, {
+      'HX-Trigger': JSON.stringify({
+        showToast: {
+          message: 'Container startup is managed by Docker Compose',
+          type: 'info',
+          duration: 3500,
+        },
+      }),
+    });
+  }
+
   const isEnabled = hasFlag(FLAGS.SERVICE_LOADED);
 
   if (isEnabled) {

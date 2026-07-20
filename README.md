@@ -53,6 +53,7 @@ seen on a real NAS installation:
 - canonical remote paths, so `/` plus `Projects` never becomes `//Projects`;
 - idempotent remote folder creation during concurrent uploads;
 - Docker stays online while waiting for authentication—no restart after `auth`;
+- NAS autostart is shown as Docker-managed when `restart: unless-stopped` is configured;
 - optional browser login with 2FA, transport checks, CSRF protection, and throttling;
 - state resets no longer restart an already configured onboarding wizard;
 - a compact NAS dashboard with clear one-way backup semantics.
@@ -338,13 +339,13 @@ An update does not require re-authentication. Keep the existing volume declarati
 YAML:
 
 ```yaml
-image: ghcr.io/robje007/proton-drive-sync:0.3.0-nas.3
+image: ghcr.io/robje007/proton-drive-sync:0.3.0-nas.4
 ```
 
 Then run these commands from the directory containing the Compose YAML:
 
 ```bash
-sudo docker pull ghcr.io/robje007/proton-drive-sync:0.3.0-nas.3
+sudo docker pull ghcr.io/robje007/proton-drive-sync:0.3.0-nas.4
 sudo docker compose up -d --no-deps --force-recreate proton-drive-sync
 sudo docker logs --tail 100 -f proton-drive-sync
 ```
