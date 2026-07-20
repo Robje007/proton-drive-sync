@@ -34,12 +34,12 @@ export const WelcomeModal: FC = () => {
 
         {/* Title */}
         <h2 class="text-2xl text-white text-center mb-3">
-          Welcome to <span class="font-bold">Proton Drive Sync</span>
+          Welcome to <span class="font-bold">Proton NAS Sync</span>
         </h2>
 
         {/* Description */}
         <p class="text-gray-400 text-sm text-center mb-2">
-          Manage sync directories, monitor activity, and control the service.
+          Configure safe one-way NAS backups and monitor every upload from one dashboard.
         </p>
         <p class="text-gray-400 text-sm text-center mb-6">
           Access it anytime at <span class="text-proton font-mono">localhost:4242</span>
@@ -52,7 +52,7 @@ export const WelcomeModal: FC = () => {
             onclick="document.getElementById('welcome-modal').remove()"
             class="px-6 py-2.5 bg-proton hover:bg-proton-dark text-white text-sm font-medium rounded-lg transition-colors"
           >
-            Begin Onboarding
+            Configure backup
           </button>
         </div>
       </div>

@@ -1,7 +1,7 @@
 {
   "name": "proton-drive-sync",
-  "version": "0.2.5-beta.2",
-  "description": "Sync local files to Proton Drive",
+  "version": "0.3.0-nas.1",
+  "description": "NAS-focused one-way backup to Proton Drive",
   "type": "module",
   "bin": {
     "proton-drive-sync": "./dist/index.js"
@@ -15,6 +15,7 @@
     "build:bin:darwin-x64": "bun build --compile --minify --target=bun-darwin-x64 ./src/index.ts --outfile ./dist/proton-drive-sync-darwin-x64",
     "build:bin:linux-x64": "bun build --compile --minify --target=bun-linux-x64 ./src/index.ts --outfile ./dist/proton-drive-sync-linux-x64",
     "build:bin:windows-x64": "bun build --compile --minify --target=bun-windows-x64 ./src/index.ts --outfile ./dist/proton-drive-sync-windows-x64.exe",
+    "test": "bun test",
     "prepare": "husky"
   },
   "keywords": [
@@ -22,11 +23,11 @@
     "drive",
     "sync"
   ],
-  "author": "damianb-bitflipper",
+  "author": "Robje007",
   "license": "GPL-3.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/damianb-bitflipper/proton-drive-sync"
+    "url": "https://github.com/Robje007/proton-drive-sync"
   },
   "files": [
     "dist"

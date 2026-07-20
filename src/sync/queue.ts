@@ -10,6 +10,9 @@ import { db, schema, run, type Tx } from '../db/index.js';
 import { SyncJobStatus, SyncEventType } from '../db/schema.js';
 import { logger, isDebugEnabled } from '../logger.js';
 import { isPathWatched } from '../config.js';
+import { getConfig } from '../config.js';
+import { isPathExcluded } from './exclusions.js';
+import { findSyncDirForJob } from './paths.js';
 import {
   RETRY_DELAYS_SEC,
   JITTER_FACTOR,
@@ -28,7 +31,7 @@ import {
 
 export const jobEvents = new EventEmitter();
 
-export type JobEventType = 'enqueue' | 'processing' | 'synced' | 'blocked' | 'retry';
+export type JobEventType = 'enqueue' | 'processing' | 'synced' | 'blocked' | 'retry' | 'discarded';
 
 export interface JobEvent {
   type: JobEventType;
@@ -182,7 +185,7 @@ export function enqueueJob(params: EnqueueJobParams, dryRun: boolean, tx: Tx): v
 /**
  * Cleans up orphaned jobs on startup.
  * - Resets any PROCESSING jobs back to PENDING (stale since app wasn't running)
- * - Deletes PENDING jobs whose localPath doesn't match any current sync_dirs
+ * - Deletes queued jobs whose mapping is stale or newly excluded
  */
 export function cleanupOrphanedJobs(dryRun: boolean, tx: Tx): void {
   if (dryRun) return;
@@ -202,19 +205,49 @@ export function cleanupOrphanedJobs(dryRun: boolean, tx: Tx): void {
     logger.info(`Reset ${resetResult.changes} stale processing jobs to pending`);
   }
 
-  // 2. Delete PENDING jobs not matching any sync_dirs
-  const pendingJobs = tx
-    .select({ id: schema.syncJobs.id, localPath: schema.syncJobs.localPath })
+  // 2. Delete unsynced jobs that no longer match the exact local/remote mapping.
+  const config = getConfig();
+  const queuedJobs = tx
+    .select({
+      id: schema.syncJobs.id,
+      localPath: schema.syncJobs.localPath,
+      remotePath: schema.syncJobs.remotePath,
+      status: schema.syncJobs.status,
+    })
     .from(schema.syncJobs)
-    .where(eq(schema.syncJobs.status, SyncJobStatus.PENDING))
     .all();
 
-  const orphanIds = pendingJobs.filter((job) => !isPathWatched(job.localPath)).map((job) => job.id);
+  const orphanIds = queuedJobs
+    .filter((job) => job.status !== SyncJobStatus.SYNCED)
+    .filter((job) => {
+      const syncDir = findSyncDirForJob(job.localPath, job.remotePath, config);
+      return (
+        !syncDir || isPathExcluded(job.localPath, syncDir.source_path, config.exclude_patterns)
+      );
+    })
+    .map((job) => job.id);
 
   if (orphanIds.length > 0) {
     run(tx.delete(schema.syncJobs).where(inArray(schema.syncJobs.id, orphanIds)));
-    logger.info(`Removed ${orphanIds.length} orphaned pending jobs`);
+    logger.info(`Removed ${orphanIds.length} stale or excluded queued jobs`);
   }
+}
+
+/** Remove a job that became stale or excluded after it was queued. */
+export function discardJob(jobId: number, localPath: string, dryRun: boolean, tx: Tx): void {
+  if (dryRun) {
+    dryRunProcessingIds.delete(jobId);
+    return;
+  }
+
+  tx.delete(schema.syncJobs).where(eq(schema.syncJobs.id, jobId)).run();
+  tx.delete(schema.processingQueue).where(eq(schema.processingQueue.localPath, localPath)).run();
+  jobEvents.emit('job', {
+    type: 'discarded',
+    jobId,
+    localPath,
+    timestamp: new Date(),
+  } satisfies JobEvent);
 }
 
 /**

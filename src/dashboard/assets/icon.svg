@@ -1,11 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#6d4aff"/>
-  <g fill="none" stroke="white" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
-    <!-- Top arrow (pointing right, curving down) -->
-    <path d="M40 20H24a12 12 0 0 0-12 12v2"/>
-    <polyline points="34,14 40,20 34,26"/>
-    <!-- Bottom arrow (pointing left, curving up) -->
-    <path d="M24 44h16a12 12 0 0 0 12-12v-2"/>
-    <polyline points="30,50 24,44 30,38"/>
-  </g>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Proton NAS Sync">
+  <defs>
+    <linearGradient id="bg" x1="8" y1="4" x2="56" y2="60" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7c5cff"/>
+      <stop offset="1" stop-color="#12b8c4"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="#0f172a"/>
+  <path d="M17 24.5A8.5 8.5 0 0 1 25.5 16h13A8.5 8.5 0 0 1 47 24.5V29H17v-4.5Z" fill="url(#bg)"/>
+  <rect x="14" y="27" width="36" height="22" rx="7" fill="url(#bg)"/>
+  <path d="M22 36h20M22 42h12" stroke="white" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="42" cy="42" r="2" fill="white"/>
 </svg>

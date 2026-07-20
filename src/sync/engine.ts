@@ -4,7 +4,6 @@
  * Orchestrates the sync process: coordinates watcher, queue, and processor.
  */
 
-import { join } from 'path';
 import { existsSync } from 'fs';
 import { db } from '../db/index.js';
 import { SyncEventType } from '../db/schema.js';
@@ -50,6 +49,7 @@ import {
   cleanupOrphanedNodeMappings,
 } from './nodes.js';
 import { isPathExcluded } from './exclusions.js';
+import { buildRemotePath, normalizeLocalRoot } from './paths.js';
 import {
   JOB_POLL_INTERVAL_MS,
   SHUTDOWN_TIMEOUT_MS,
@@ -81,24 +81,17 @@ function resolveSyncTarget(
   file: FileChange,
   config: Config
 ): { localPath: string; remotePath: string } | null {
-  const localPath = join(file.watchRoot, file.name);
+  const localPath = normalizeLocalRoot(`${file.watchRoot}/${file.name}`);
 
   // Find the sync_dir that matches this watcher's root
-  // Normalize both paths to handle trailing slashes consistently
-  const syncDir = config.sync_dirs.find((d) => {
-    const sourcePath = d.source_path.endsWith('/') ? d.source_path.slice(0, -1) : d.source_path;
-    const watchRoot = file.watchRoot.endsWith('/') ? file.watchRoot.slice(0, -1) : file.watchRoot;
-    return watchRoot === sourcePath;
-  });
+  const syncDir = config.sync_dirs.find(
+    (dir) => normalizeLocalRoot(dir.source_path) === normalizeLocalRoot(file.watchRoot)
+  );
 
   if (!syncDir) return null;
 
-  // Calculate relative path from this sync_dir's root
-  const sourcePath = syncDir.source_path.endsWith('/')
-    ? syncDir.source_path.slice(0, -1)
-    : syncDir.source_path;
-  const relative = localPath === sourcePath ? '' : localPath.slice(sourcePath.length + 1);
-  const remotePath = relative ? `${syncDir.remote_root}/${relative}` : syncDir.remote_root;
+  const remotePath = buildRemotePath(syncDir, localPath);
+  if (!remotePath) return null;
 
   return { localPath, remotePath };
 }
@@ -176,7 +169,7 @@ async function handleFileChange(file: FileChange, config: Config, dryRun: boolea
     // DELETE event
     db.transaction((tx) => {
       const typeLabel = file.type === 'd' ? 'dir' : 'file';
-      logger.info(`[watcher] [delete] ${file.name} (type: ${typeLabel})`);
+      logger.debug(`[watcher] [delete] ${file.name} (type: ${typeLabel})`);
 
       enqueueJob(
         {
@@ -213,7 +206,7 @@ async function handleFileChange(file: FileChange, config: Config, dryRun: boolea
           logger.debug(`[skip] create directory already synced: ${file.name} -> ${remotePath}`);
           return;
         }
-        logger.info(`[watcher] [create_dir] ${file.name}`);
+        logger.debug(`[watcher] [create_dir] ${file.name}`);
         enqueueJob(
           {
             eventType: SyncEventType.CREATE_DIR,
@@ -229,7 +222,7 @@ async function handleFileChange(file: FileChange, config: Config, dryRun: boolea
       // File — token check + SHA1 fallback (single DB read)
       const { enqueue } = await shouldEnqueueFileChange(localPath, newHash, file.name, dryRun);
       if (enqueue) {
-        logger.info(`[watcher] [create] ${file.name}`);
+        logger.debug(`[watcher] [create] ${file.name}`);
         db.transaction((tx) => {
           enqueueJob(
             {
@@ -261,7 +254,7 @@ async function handleFileChange(file: FileChange, config: Config, dryRun: boolea
     dryRun
   );
   if (enqueue) {
-    logger.info(
+    logger.debug(
       `[watcher] [update] ${file.name} (mtime+size: ${storedToken || 'none'} -> ${newHash})`
     );
     db.transaction((tx) => {
@@ -356,6 +349,11 @@ export async function runWatchMode(options: SyncOptions): Promise<void> {
     cleanupOrphanedChangeTokens(tx);
   });
 
+  // Start watching and processing before the initial scan. Batches can then drain
+  // while discovery continues, and live changes cannot fall into a startup gap.
+  await setupWatchSubscriptions(config, createChangeHandler());
+  const processorHandle = startJobProcessorLoop(client, dryRun);
+
   // Scan for changes that happened while we were offline
   logger.info('Checking for changes since last run...');
   const totalChanges = await queryAllChanges(config, createChangeHandler());
@@ -365,9 +363,6 @@ export async function runWatchMode(options: SyncOptions): Promise<void> {
     logger.info('No changes since last run');
   }
 
-  // Set up file watching for future changes
-  await setupWatchSubscriptions(config, createChangeHandler());
-
   // Signal that startup is complete (daemon is ready)
   setFlag(FLAGS.STARTUP_READY);
 
@@ -376,27 +371,32 @@ export async function runWatchMode(options: SyncOptions): Promise<void> {
     setSyncConcurrency(getConfig().sync_concurrency);
   });
 
-  onConfigChange('sync_dirs', async () => {
-    logger.info('sync_dirs changed, reinitializing watch subscriptions...');
-    const newConfig = getConfig();
-    db.transaction((tx) => {
-      cleanupOrphanedJobs(dryRun, tx);
-      cleanupOrphanedNodeMappings(tx);
-      cleanupOrphanedChangeTokens(tx);
-    });
+  let configReloadChain = Promise.resolve();
+  const reloadMappings = (): void => {
+    configReloadChain = configReloadChain
+      .then(async () => {
+        logger.info('Sync mappings or exclusions changed; rebuilding safe queue...');
+        const newConfig = getConfig();
+        db.transaction((tx) => {
+          cleanupOrphanedJobs(dryRun, tx);
+          cleanupOrphanedNodeMappings(tx);
+          cleanupOrphanedChangeTokens(tx);
+        });
 
-    // Scan for changes in all sync dirs (including newly added ones)
-    logger.info('Checking for changes in sync directories...');
-    const totalChanges = await queryAllChanges(newConfig, createChangeHandler());
-    if (totalChanges > 0) {
-      logger.info(`Found ${totalChanges} changes to sync`);
-    }
+        await setupWatchSubscriptions(newConfig, createChangeHandler());
+        logger.info('Checking configured directories in bounded batches...');
+        const totalChanges = await queryAllChanges(newConfig, createChangeHandler());
+        if (totalChanges > 0) logger.info(`Queued ${totalChanges} current changes`);
+      })
+      .catch((error: unknown) => {
+        logger.error(
+          `Failed to apply sync configuration: ${error instanceof Error ? error.message : String(error)}`
+        );
+      });
+  };
 
-    await setupWatchSubscriptions(newConfig, createChangeHandler());
-  });
-
-  // Start the job processor loop
-  const processorHandle = startJobProcessorLoop(client, dryRun);
+  onConfigChange('sync_dirs', reloadMappings);
+  onConfigChange('exclude_patterns', reloadMappings);
 
   // Start background reconciliation (safety net for missed watcher events)
   const reconciliationHandle = startBackgroundReconciliation(dryRun, createChangeHandler());
@@ -483,6 +483,11 @@ function startBackgroundReconciliation(
       );
 
       const storedTokens = getAllStoredChangeTokens(watchDir);
+      for (const storedPath of storedTokens.keys()) {
+        if (isPathExcluded(storedPath, watchDir, excludePatterns)) {
+          storedTokens.delete(storedPath);
+        }
+      }
       const changes = compareWithStoredChangeTokens(watchDir, fsState, storedTokens);
 
       if (changes.length > 0) {

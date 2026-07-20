@@ -4,7 +4,6 @@
  * Executes sync jobs: create/update/delete operations against Proton Drive.
  */
 
-import { relative, basename } from 'path';
 import { SyncEventType } from '../db/schema.js';
 import { db } from '../db/index.js';
 import { createNode } from '../proton/create.js';
@@ -14,13 +13,13 @@ import { DEFAULT_SYNC_CONCURRENCY, getConfig } from '../config.js';
 import type { ProtonDriveClient } from '../proton/types.js';
 import {
   type Job,
-  enqueueJob,
   getNextPendingJob,
   markJobSynced,
   markJobBlocked,
   setJobError,
   categorizeError,
   scheduleRetry,
+  discardJob,
 } from './queue.js';
 import {
   getNodeMapping,
@@ -28,13 +27,9 @@ import {
   deleteNodeMapping,
   deleteNodeMappingsUnderPath,
 } from './nodes.js';
-import {
-  getFileState,
-  storeFileState,
-  deleteChangeToken,
-  deleteChangeTokensUnderPath,
-} from './fileState.js';
-import { scanDirectory } from './watcher.js';
+import { storeFileState, deleteChangeToken, deleteChangeTokensUnderPath } from './fileState.js';
+import { isPathExcluded } from './exclusions.js';
+import { findSyncDirForJob } from './paths.js';
 
 // ============================================================================
 // Task Pool State (persistent across iterations)
@@ -151,18 +146,6 @@ async function createNodeOrThrow(
 }
 
 /**
- * Build remote path for a child file/directory.
- */
-function buildChildRemotePath(
-  parentLocalPath: string,
-  parentRemotePath: string,
-  childLocalPath: string
-): string {
-  const relativePath = relative(parentLocalPath, childLocalPath);
-  return `${parentRemotePath}/${relativePath}`;
-}
-
-/**
  * Process available jobs up to concurrency limit (non-blocking).
  * Spawns new tasks to fill available capacity and returns immediately.
  * Call this periodically to keep the task pool saturated.
@@ -196,6 +179,16 @@ async function processJob(client: ProtonDriveClient, job: Job, dryRun: boolean):
 
   if (!remotePath) {
     throw new Error(`Job ${id} missing required remotePath`);
+  }
+
+  // Revalidate immediately before network I/O. Config and exclusions may have changed
+  // after this job was queued.
+  const currentConfig = getConfig();
+  const syncDir = findSyncDirForJob(localPath, remotePath, currentConfig);
+  if (!syncDir || isPathExcluded(localPath, syncDir.source_path, currentConfig.exclude_patterns)) {
+    logger.info(`Discarding stale or excluded job ${id}: ${localPath}`);
+    db.transaction((tx) => discardJob(id, localPath, dryRun, tx));
+    return;
   }
 
   try {
@@ -271,60 +264,6 @@ async function processJob(client: ProtonDriveClient, job: Job, dryRun: boolean):
             storeFileState(localPath, job.changeToken, null, dryRun, tx);
           }
           markJobSynced(id, localPath, dryRun, tx);
-        });
-
-        // Step 3: Scan children and queue jobs for unsynced items
-        const excludePatterns = getConfig().exclude_patterns;
-        const fsState = await scanDirectory(localPath, excludePatterns);
-
-        db.transaction((tx) => {
-          for (const [childPath, stats] of fsState) {
-            // Skip the directory itself
-            if (childPath === localPath) continue;
-
-            const childRemotePath = buildChildRemotePath(localPath, remotePath, childPath);
-            const childHash = `${stats.mtime_ms}:${stats.size}`;
-
-            if (stats.isDirectory) {
-              // Check if directory already synced for this remote target
-              const existingMapping = getNodeMapping(childPath, childRemotePath, tx);
-              if (existingMapping) {
-                logger.debug(`[skip] child directory already synced: ${basename(childPath)}`);
-                continue;
-              }
-
-              logger.debug(`[queue] child directory: ${basename(childPath)}`);
-              enqueueJob(
-                {
-                  eventType: SyncEventType.CREATE_DIR,
-                  localPath: childPath,
-                  remotePath: childRemotePath,
-                  changeToken: childHash,
-                },
-                dryRun,
-                tx
-              );
-            } else {
-              // Check if file already synced with same change token
-              const storedToken = getFileState(childPath, tx)?.changeToken;
-              if (storedToken && storedToken === childHash) {
-                logger.debug(`[skip] child file already synced: ${basename(childPath)}`);
-                continue;
-              }
-
-              logger.debug(`[queue] child file: ${basename(childPath)}`);
-              enqueueJob(
-                {
-                  eventType: SyncEventType.CREATE_FILE,
-                  localPath: childPath,
-                  remotePath: childRemotePath,
-                  changeToken: childHash,
-                },
-                dryRun,
-                tx
-              );
-            }
-          }
         });
 
         return;

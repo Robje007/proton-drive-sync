@@ -3,13 +3,18 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    image: ghcr.io/damianb-bitflipper/proton-drive-sync:latest
+    image: ghcr.io/robje007/proton-drive-sync:latest
     container_name: proton-drive-sync
     restart: unless-stopped
 
     environment:
       - KEYRING_PASSWORD=${KEYRING_PASSWORD}
       - TZ=${TZ:-UTC}
+      # Secure dashboard sign-in is opt-in. Outside localhost, put the dashboard
+      # behind an HTTPS reverse proxy before enabling WEB_AUTH_TRUST_PROXY.
+      # - WEB_AUTH_ENABLED=1
+      # - WEB_AUTH_ACCESS_TOKEN=${WEB_AUTH_ACCESS_TOKEN}
+      # - WEB_AUTH_TRUST_PROXY=1
       # Optional: headless authentication (does not support 2FA accounts)
       # - PROTON_USERNAME=${PROTON_USERNAME}
       # - PROTON_PASSWORD=${PROTON_PASSWORD}
@@ -25,11 +30,6 @@ services:
 
     ports:
       - '${DASHBOARD_PORT:-4242}:4242'
-
-    # Required for fs.watch inotify file watching
-    sysctls:
-      - fs.inotify.max_user_watches=524288
-      - fs.inotify.max_user_instances=512
 
     # Allow graceful shutdown
     stop_grace_period: 30s

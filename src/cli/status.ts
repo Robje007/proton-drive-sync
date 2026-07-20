@@ -34,4 +34,5 @@ export async function statusCommand(): Promise<void> {
   };
 
   console.log(JSON.stringify(result));
+  if (!running) process.exitCode = 1;
 }
