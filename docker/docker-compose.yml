@@ -15,9 +15,7 @@ services:
       # - WEB_AUTH_ENABLED=1
       # - WEB_AUTH_ACCESS_TOKEN=${WEB_AUTH_ACCESS_TOKEN}
       # - WEB_AUTH_TRUST_PROXY=1
-      # Optional: headless authentication (does not support 2FA accounts)
-      # - PROTON_USERNAME=${PROTON_USERNAME}
-      # - PROTON_PASSWORD=${PROTON_PASSWORD}
+      # Authenticate through `docker exec` or enable the secure web flow above.
 
     volumes:
       # Persistent config (credentials.enc, config.json)
