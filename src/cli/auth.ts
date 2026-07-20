@@ -16,6 +16,7 @@ import { storeCredentials, deleteStoredCredentials, getStoredCredentials } from 
 import type { StoredCredentials } from '../keychain.js';
 import type { ProtonDriveClient, ApiError } from '../proton/types.js';
 import { logger } from '../logger.js';
+import { adaptSdkClient } from '../proton/sdkAdapter.js';
 
 // Re-export for use in start.ts
 export { getStoredCredentials } from '../keychain.js';
@@ -62,7 +63,7 @@ async function createProtonDriveClientFromSession(
     telemetry,
   });
 
-  return client as unknown as ProtonDriveClient;
+  return adaptSdkClient(client);
 }
 
 /**

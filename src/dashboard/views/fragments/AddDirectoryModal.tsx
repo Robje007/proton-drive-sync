@@ -55,6 +55,21 @@ export const AddDirectoryModal: FC = () => {
             />
           </div>
 
+          <div class="mb-6">
+            <label class="block text-xs text-gray-500 mb-1">Direction</label>
+            <select
+              name="sync_mode"
+              class="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:border-proton"
+            >
+              <option value="upload">NAS → Drive (recommended)</option>
+              <option value="two_way">Two-way sync (beta)</option>
+            </select>
+            <p class="mt-2 text-xs text-amber-300/90">
+              Beta downloads remote changes too. Conflicts and remote deletes are preserved in a
+              local recovery folder.
+            </p>
+          </div>
+
           {/* Buttons */}
           <div class="flex justify-end gap-3">
             <button

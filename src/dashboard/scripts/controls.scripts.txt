@@ -169,7 +169,7 @@
       .map(
         (dir, index) => `
       <div class="flex items-center gap-3 p-4 bg-gray-900 border border-gray-700 rounded-lg group">
-        <div class="flex-1 grid grid-cols-2 gap-4">
+        <div class="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div>
             <label class="block text-xs text-gray-500 mb-1">Local Path</label>
             <input
@@ -179,6 +179,16 @@
               placeholder="/path/to/local/directory"
               class="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white font-mono text-sm focus:outline-none focus:border-proton"
             />
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Direction</label>
+            <select
+              onchange="updateSyncDir(${index}, 'sync_mode', this.value)"
+              class="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:border-proton"
+            >
+              <option value="upload" ${dir.sync_mode !== 'two_way' ? 'selected' : ''}>NAS → Drive</option>
+              <option value="two_way" ${dir.sync_mode === 'two_way' ? 'selected' : ''}>Two-way (beta)</option>
+            </select>
           </div>
           <div>
             <div class="flex items-center gap-1 mb-1">
@@ -226,6 +236,15 @@
   }
 
   function updateSyncDir(index, field, value) {
+    if (field === 'sync_mode' && value === 'two_way') {
+      const accepted = confirm(
+        'Two-way sync is beta. Remote changes will be downloaded to this NAS folder. Conflicts and deletes are preserved in a recovery folder. Continue?'
+      );
+      if (!accepted) {
+        event.target.value = syncDirs[index].sync_mode || 'upload';
+        return;
+      }
+    }
     if (field === 'remote_root') {
       const input = event.target;
       if (value && !value.startsWith('/')) {
@@ -249,6 +268,7 @@
       sync_dirs: validDirs.map((d) => ({
         source_path: d.source_path.trim(),
         remote_root: d.remote_root?.trim() || '',
+        sync_mode: d.sync_mode === 'two_way' ? 'two_way' : 'upload',
       })),
     };
 

@@ -497,7 +497,7 @@ function renderSyncDirsHtml(dirs: Config['sync_dirs']): string {
     .map(
       (dir, index) => `
       <div class="flex items-center gap-3 p-4 bg-gray-900 border border-gray-700 rounded-lg group">
-        <div class="flex-1 grid grid-cols-2 gap-4">
+        <div class="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div>
             <label class="block text-xs text-gray-500 mb-1">Local Path</label>
             <input
@@ -507,6 +507,16 @@ function renderSyncDirsHtml(dirs: Config['sync_dirs']): string {
               placeholder="/path/to/local/directory"
               class="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white font-mono text-sm focus:outline-none focus:border-proton"
             />
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Direction</label>
+            <select
+              onchange="updateSyncDir(${index}, 'sync_mode', this.value)"
+              class="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:border-proton"
+            >
+              <option value="upload" ${dir.sync_mode !== 'two_way' ? 'selected' : ''}>NAS → Drive</option>
+              <option value="two_way" ${dir.sync_mode === 'two_way' ? 'selected' : ''}>Two-way (beta)</option>
+            </select>
           </div>
           <div>
             <div class="flex items-center gap-1 mb-1">
@@ -561,11 +571,12 @@ function renderConfigInfo(config: Config | null): string {
         <span class="font-mono text-xs text-gray-300">${escapeHtml(dir.source_path)}</span>
       </div>
       
-      ${icon('arrow-right', 'w-3 h-3 text-gray-600 shrink-0')}
+      ${icon(dir.sync_mode === 'two_way' ? 'arrow-left-right' : 'arrow-right', 'w-3 h-3 text-gray-600 shrink-0')}
 
       <div class="flex items-center gap-2">
         ${icon('cloud', 'w-3.5 h-3.5 text-indigo-400 shrink-0')}
         <span class="font-mono text-xs text-indigo-300">${escapeHtml(remotePath)}</span>
+        ${dir.sync_mode === 'two_way' ? '<span class="text-[10px] uppercase tracking-wide text-amber-300">beta</span>' : ''}
       </div>
     </div>`;
     })
@@ -1061,6 +1072,10 @@ function normalizeSyncDirs(syncDirs: Config['sync_dirs']): Config['sync_dirs'] {
   for (const dir of syncDirs) {
     const sourcePath = normalizeLocalRoot(dir.source_path);
     const remoteRoot = normalizeRemoteRoot(dir.remote_root || '/');
+    const syncMode = dir.sync_mode || 'upload';
+    if (syncMode !== 'upload' && syncMode !== 'two_way') {
+      throw new Error(`Invalid sync mode: ${String(syncMode)}`);
+    }
 
     try {
       statSync(sourcePath);
@@ -1075,7 +1090,7 @@ function normalizeSyncDirs(syncDirs: Config['sync_dirs']): Config['sync_dirs'] {
       );
     }
 
-    normalized.push({ source_path: sourcePath, remote_root: remoteRoot });
+    normalized.push({ source_path: sourcePath, remote_root: remoteRoot, sync_mode: syncMode });
   }
 
   return normalized;
@@ -1125,6 +1140,7 @@ app.post('/api/add-directory', async (c) => {
     const formData = await c.req.parseBody();
     const sourcePathInput = ((formData.source_path as string) || '').trim();
     const remoteRootInput = ((formData.remote_root as string) || '/').trim();
+    const syncModeInput = ((formData.sync_mode as string) || 'upload').trim();
 
     // Validate source_path is provided
     if (!sourcePathInput) {
@@ -1138,6 +1154,9 @@ app.post('/api/add-directory', async (c) => {
 
     const sourcePath = normalizeLocalRoot(sourcePathInput);
     const remoteRoot = normalizeRemoteRoot(remoteRootInput);
+    if (syncModeInput !== 'upload' && syncModeInput !== 'two_way') {
+      throw new Error(`Invalid sync mode: ${syncModeInput}`);
+    }
 
     // Validate local path exists on filesystem (works for both files and directories)
     let pathExists = false;
@@ -1171,7 +1190,11 @@ app.post('/api/add-directory', async (c) => {
     }
 
     // Add to config
-    const newDir = { source_path: sourcePath, remote_root: remoteRoot };
+    const newDir = {
+      source_path: sourcePath,
+      remote_root: remoteRoot,
+      sync_mode: syncModeInput,
+    } as const;
     const newConfig: Config = {
       ...defaultConfig,
       ...currentConfig,

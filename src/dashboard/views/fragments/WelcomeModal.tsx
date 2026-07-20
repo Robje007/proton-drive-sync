@@ -39,7 +39,7 @@ export const WelcomeModal: FC = () => {
 
         {/* Description */}
         <p class="text-gray-400 text-sm text-center mb-2">
-          Configure safe one-way NAS backups and monitor every upload from one dashboard.
+          Configure safe NAS backups or opt-in two-way beta mappings from one dashboard.
         </p>
         <p class="text-gray-400 text-sm text-center mb-6">
           Access it anytime at <span class="text-proton font-mono">localhost:4242</span>

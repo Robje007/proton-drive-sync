@@ -132,3 +132,25 @@ export const nodeMapping = sqliteTable(
   },
   (table) => [primaryKey({ columns: [table.localPath, table.remotePath] })]
 );
+
+/** Baseline used by opt-in two-way mappings to detect remote/local conflicts. */
+export const remoteSyncState = sqliteTable(
+  'remote_sync_state',
+  {
+    sourcePath: text('source_path').notNull(),
+    nodeUid: text('node_uid').notNull(),
+    localPath: text('local_path').notNull(),
+    remotePath: text('remote_path').notNull(),
+    parentNodeUid: text('parent_node_uid').notNull(),
+    isDirectory: integer('is_directory', { mode: 'boolean' }).notNull(),
+    revisionUid: text('revision_uid'),
+    contentSha1: text('content_sha1'),
+    updatedAt: integer('updated_at', { mode: 'timestamp' })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (table) => [
+    primaryKey({ columns: [table.sourcePath, table.nodeUid] }),
+    index('idx_remote_sync_state_source').on(table.sourcePath),
+  ]
+);

@@ -14,7 +14,7 @@ export interface RevisionData {
   creationTime: Date;
   contentAuthor?: unknown;
   storageSize: number;
-  claimedSize: number;
+  claimedSize?: number;
   claimedModificationTime?: Date;
   claimedDigests?: Record<string, string>;
   claimedAdditionalMetadata?: unknown;
@@ -72,7 +72,6 @@ export interface UploadController {
 }
 
 export interface FileUploader {
-  getAvailableName(): Promise<string>;
   uploadFromStream(
     stream: ReadableStream,
     thumbnails: [],
@@ -86,6 +85,36 @@ export interface FileRevisionUploader {
     thumbnails: [],
     onProgress?: (uploadedBytes: number) => void
   ): Promise<UploadController>;
+}
+
+export interface DownloadController {
+  completion(): Promise<void>;
+  isDownloadCompleteWithSignatureIssues(): boolean;
+}
+
+export interface FileDownloader {
+  downloadToStream(
+    stream: WritableStream,
+    onProgress?: (downloadedBytes: number) => void
+  ): DownloadController;
+}
+
+export type DriveEvent =
+  | {
+      type: 'node_created' | 'node_updated' | 'node_deleted';
+      nodeUid: string;
+      parentNodeUid?: string;
+      treeEventScopeId: string;
+      eventId: string;
+    }
+  | {
+      type: 'fast_forward' | 'tree_refresh' | 'tree_remove';
+      treeEventScopeId: string;
+      eventId: string;
+    };
+
+export interface EventSubscription {
+  dispose(): void;
 }
 
 export interface UploadMetadata {
@@ -105,6 +134,12 @@ export interface UploadMetadata {
 export interface BaseProtonDriveClient {
   iterateFolderChildren(folderUid: string): AsyncIterable<NodeResult>;
   getMyFilesRootFolder(): Promise<RootFolderResult>;
+  getNode(nodeUid: string): Promise<NodeData>;
+  getFileDownloader(nodeUid: string, signal?: AbortSignal): Promise<FileDownloader>;
+  subscribeToTreeEvents(
+    treeEventScopeId: string,
+    callback: (event: DriveEvent) => Promise<void>
+  ): Promise<EventSubscription>;
 }
 
 /**
