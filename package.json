@@ -1,7 +1,7 @@
 {
   "name": "proton-drive-sync",
-  "version": "0.3.0-nas.4",
-  "description": "NAS-focused one-way backup to Proton Drive",
+  "version": "0.4.0-nas.1",
+  "description": "NAS-focused Proton Drive sync with opt-in two-way beta",
   "type": "module",
   "bin": {
     "proton-drive-sync": "./dist/index.js"
@@ -34,7 +34,8 @@
   ],
   "dependencies": {
     "@inquirer/prompts": "^8.0.1",
-    "@protontech/drive-sdk": "^0.7.0",
+    "@protontech/crypto": "2.0.0",
+    "@protontech/drive-sdk": "0.19.2",
     "bcryptjs": "^3.0.3",
     "chokidar": "^5.0.0",
     "commander": "^14.0.2",

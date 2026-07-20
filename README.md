@@ -1,73 +1,34 @@
 # Proton NAS Sync
 
-An unofficial, community-maintained Proton Drive uploader for NAS, Docker, and native command-line
-use.
+An unofficial Proton Drive sync client for NAS, Docker, and native command-line use. It includes a
+custom dashboard, safe upload backups, and an opt-in **two-way sync beta**.
 
-This fork keeps local directories backed up to Proton Drive while staying responsive around large
-project trees. It is designed for headless systems such as Ugreen NAS, Synology, QNAP, Unraid, and
-ordinary Linux servers.
+[Support development on Ko-fi](https://ko-fi.com/robje007)
 
-If this NAS-focused fork is useful to you, you can support its development on
-[Ko-fi](https://ko-fi.com/robje007).
+> This community project is not affiliated with or endorsed by Proton AG. Two-way sync is beta and
+> should first be tested with a small, backed-up folder.
 
-> [!IMPORTANT]
-> This is **one-way synchronization**: local changes are uploaded to Proton Drive. Changes made in
-> Proton Drive are not downloaded to the NAS. This project is not affiliated with or endorsed by
-> Proton AG.
+## Features
 
-## What it provides
+- Upload-only backup or two-way beta, selectable per folder mapping.
+- Remote event monitoring with a periodic reconciliation safety net.
+- Atomic downloads: a partial download never replaces the destination file.
+- Simultaneous edits keep both versions in `.proton-sync-conflicts`.
+- Remote deletes move the local copy to `.proton-sync-recovery`.
+- Dashboard for mappings, queues, logs, pause/resume, and optional secure sign-in.
+- Large-tree scanning with useful defaults such as `node_modules` and `.venv` exclusions.
+- Docker images for AMD64 and ARM64, plus native CLI support.
+- Official `@protontech/drive-sdk` 0.19.2 integration.
 
-- A custom browser dashboard for status, queues, mappings, pause/resume, logs, and configuration.
-- Optional browser-based Proton authentication with 2FA and two-password account support.
-- Published Docker images for AMD64 and ARM64 systems.
-- Native CLI operation from source on Linux, macOS, and Windows.
-- Multiple local-directory to Proton Drive mappings.
-- Configurable concurrency and exclusion patterns.
-- Continuous filesystem watching or a one-shot scan.
-- Encrypted reusable Proton session storage.
+## Docker quick start
 
-## Installation choices
-
-| Method              | Best for                                      | Availability                |
-| ------------------- | --------------------------------------------- | --------------------------- |
-| Docker Compose      | Ugreen, Synology, QNAP, Unraid, Linux servers | Published AMD64/ARM64 image |
-| Docker CLI          | NAS systems without Compose projects          | Published AMD64/ARM64 image |
-| Native source build | Desktop, server, and development use          | Build locally with Bun      |
-
-Docker is the recommended NAS method, but the application is not Docker-only. The CLI, dashboard,
-watcher, configuration commands, and native service commands remain available when building from
-source.
-
-## Why this fork exists
-
-The upstream project provides the Proton Drive integration. This fork focuses on the failure modes
-seen on a real NAS installation:
-
-- restart-safe process locks that detect Docker PID reuse;
-- an explicit `unlock` command that only removes verified stale locks;
-- lazy, batched scans instead of loading an entire project tree into memory;
-- early pruning of `node_modules`, package caches, virtual environments, and other defaults;
-- queued jobs are revalidated immediately before upload;
-- changing a remote root removes jobs made with the old mapping;
-- excluded files already in the queue are discarded safely;
-- canonical remote paths, so `/` plus `Projects` never becomes `//Projects`;
-- idempotent remote folder creation during concurrent uploads;
-- Docker stays online while waiting for authentication—no restart after `auth`;
-- NAS autostart is shown as Docker-managed when `restart: unless-stopped` is configured;
-- optional browser login with 2FA, transport checks, CSRF protection, and throttling;
-- state resets no longer restart an already configured onboarding wizard;
-- a compact NAS dashboard with clear one-way backup semantics.
-
-## Quick start with Docker Compose
-
-Generate a credential-encryption key:
+Generate a key for encrypting the stored Proton session:
 
 ```bash
 openssl rand -base64 32
 ```
 
-The key may be placed directly in the Compose YAML. This is convenient for NAS interfaces that
-manage a project as one file:
+Paste that key directly into this Compose configuration—no separate `.env` file is required:
 
 ```yaml
 name: proton-nas-sync
@@ -75,6 +36,7 @@ name: proton-nas-sync
 services:
   proton-drive-sync:
     image: ghcr.io/robje007/proton-drive-sync:latest
+    pull_policy: always
     container_name: proton-drive-sync
     restart: unless-stopped
 
@@ -82,9 +44,6 @@ services:
       KEYRING_PASSWORD: 'PASTE_YOUR_GENERATED_KEY_HERE'
       TZ: 'Europe/Amsterdam'
       DOCKER: '1'
-      # WEB_AUTH_ENABLED: '1'
-      # WEB_AUTH_ACCESS_TOKEN: 'PASTE_A_SEPARATE_TOKEN_OF_AT_LEAST_32_CHARACTERS'
-      # WEB_AUTH_TRUST_PROXY: '1' # only behind an HTTPS reverse proxy
 
     ports:
       - '4242:4242'
@@ -92,7 +51,7 @@ services:
     volumes:
       - proton-drive-config:/config/proton-drive-sync
       - proton-drive-state:/state/proton-drive-sync
-      - /your/host/folder:/data/files
+      - /home/robin:/data/robin
 
     stop_grace_period: 30s
 
@@ -101,148 +60,146 @@ volumes:
   proton-drive-state:
 ```
 
-Replace `/your/host/folder` with the real directory on the NAS. In the dashboard, use the
-**container path** `/data/files`, not the original host path.
+Keep `KEYRING_PASSWORD` unchanged after authentication. Anyone who can read the Compose YAML can
+read this key, so restrict access to the configuration and never commit it.
 
-Putting the key directly in YAML means anyone who can read that YAML can read the encryption key.
-Restrict access to the file and never commit it to a public repository.
-
-An `.env` file remains an optional alternative; it is not required. To use one, replace the direct
-value with:
-
-```yaml
-environment:
-  KEYRING_PASSWORD: ${KEYRING_PASSWORD}
-```
-
-and place `KEYRING_PASSWORD=...` in `.env`. Choose one method and keep the generated value safe:
-changing it makes the existing encrypted credentials unreadable.
-
-### Container environment reference
-
-| Variable                | Required         | Purpose                                                          |
-| ----------------------- | ---------------- | ---------------------------------------------------------------- |
-| `KEYRING_PASSWORD`      | Yes              | Encrypts the reusable Proton session                             |
-| `TZ`                    | No               | Container timezone; defaults to UTC                              |
-| `DOCKER`                | No               | Enables Docker-aware defaults; already set by the image          |
-| `WEB_AUTH_ENABLED`      | No               | Enables the opt-in dashboard login flow                          |
-| `WEB_AUTH_ACCESS_TOKEN` | With web login   | Separate token protecting login endpoints; minimum 32 characters |
-| `WEB_AUTH_TRUST_PROXY`  | With HTTPS proxy | Trusts forwarded HTTPS information from the reverse proxy        |
-
-Start it:
+Start the container:
 
 ```bash
-sudo docker compose pull
 sudo docker compose up -d
-```
-
-The dashboard remains available while credentials are missing. Authenticate once:
-
-```bash
 sudo docker exec -it proton-drive-sync proton-drive-sync auth
+sudo docker logs --tail 100 -f proton-drive-sync
 ```
 
-The running service detects the new credentials within five seconds. A container restart is not
-required.
-
-Open `http://NAS-IP:4242` and create a mapping, for example:
+The service notices saved authentication automatically; a restart after `auth` is not required.
+Open `http://NAS-IP:4242` and add a mapping such as:
 
 ```text
 /data/robin/Projects → /backupnas
 ```
 
-For example, the host mount `/home/robin:/data/robin` means the application sees
-`/data/robin/Projects`. Entering `/home/robin/Projects` in the dashboard will fail because that is a
-host path, not a container path.
+Use the path **inside the container**. With `/home/robin:/data/robin`, the dashboard must use
+`/data/robin`, not `/home/robin`.
 
-## Dashboard overview
+## Upload-only or two-way beta
 
-The custom dashboard provides:
+Every mapping has its own direction:
 
-- live authentication and connection status;
-- pending, active, completed, retry, and blocked queues;
-- current local-to-remote mappings;
-- pause, resume, retry, and shutdown controls;
-- concurrency and exclusion-aware directory configuration;
-- live application logs;
-- optional secure Proton login; and
-- an About page for this community fork.
+- **NAS → Drive** is the default. Local additions, changes, moves, and deletes are sent to Drive.
+- **Two-way (beta)** also downloads changes made in Proton Drive.
 
-The dashboard is an administration interface. Keep it on a trusted LAN, behind a VPN, or behind an
-authenticated reverse proxy.
+Enable two-way in **Settings → Backup configuration → Direction**. Existing configurations without
+a direction remain upload-only after upgrading.
 
-## Secure sign-in through the dashboard
+For a new native or Docker CLI mapping, add `--two-way`:
 
-Browser sign-in is disabled by default. It supports Proton 2FA and two-password accounts without
-storing the login password or verification code. An unfinished authentication flow exists only in
-memory and expires after five minutes.
+```bash
+sudo docker exec proton-drive-sync proton-drive-sync config sync-dir \
+  --add /data/robin/Projects --remote /backupnas --two-way
+```
 
-Generate a separate dashboard login token:
+The first two-way scan is deliberately conservative:
+
+- Equal files are adopted without another transfer.
+- If different local and remote files already have the same path, the remote version is downloaded
+  to `.proton-sync-conflicts/<timestamp>/...`.
+- If both sides change after the baseline, both versions are kept in the same way.
+- A remote delete moves the local version to `.proton-sync-recovery/<timestamp>/...`.
+- Safety and temporary folders are never uploaded.
+
+After inspecting a conflict, keep the desired file at its normal path and edit or replace it once;
+that intentional local change is then uploaded.
+
+The beta is built on the official SDK's download and Drive-event APIs. Proton currently labels its
+SDK as not generally available for third-party production applications, so keep another backup of
+important data and expect beta behavior to evolve.
+
+## Upgrade without losing configuration
+
+The named `config` and `state` volumes contain authentication, mappings, and sync history. A normal
+image upgrade preserves them:
+
+```bash
+sudo docker compose pull
+sudo docker compose up -d
+sudo docker logs --tail 100 -f proton-drive-sync
+```
+
+Do **not** run `sudo docker compose down -v`; `-v` deletes the named volumes. Also keep the existing
+`KEYRING_PASSWORD`, config volume name, and state volume name unchanged.
+
+To confirm the running image:
+
+```bash
+sudo docker inspect proton-drive-sync --format '{{.Config.Image}}'
+sudo docker exec proton-drive-sync proton-drive-sync --version
+```
+
+## Useful Docker commands
+
+```bash
+# Show mappings
+sudo docker exec proton-drive-sync proton-drive-sync config sync-dir --list
+
+# Show exclusions
+sudo docker exec proton-drive-sync proton-drive-sync config exclude --list
+
+# Authenticate again
+sudo docker exec -it proton-drive-sync proton-drive-sync auth
+
+# Safely clear a verified stale process lock
+sudo docker exec proton-drive-sync proton-drive-sync unlock
+
+# Restart and follow logs
+sudo docker restart proton-drive-sync
+sudo docker logs --tail 100 -f proton-drive-sync
+```
+
+## Optional dashboard sign-in
+
+CLI authentication is the simplest choice. Browser sign-in is disabled by default. To enable it,
+generate a separate access token:
 
 ```bash
 openssl rand -base64 48
 ```
 
-Never reuse `KEYRING_PASSWORD` as the dashboard token. The values can be placed directly in the
-Compose YAML:
+Add both values directly under the Compose `environment` section:
 
 ```yaml
-environment:
-  KEYRING_PASSWORD: 'YOUR_EXISTING_ENCRYPTION_KEY'
-  TZ: 'Europe/Amsterdam'
-  DOCKER: '1'
-  WEB_AUTH_ENABLED: '1'
-  WEB_AUTH_ACCESS_TOKEN: 'PASTE_A_SEPARATE_TOKEN_OF_AT_LEAST_32_CHARACTERS'
+WEB_AUTH_ENABLED: '1'
+WEB_AUTH_ACCESS_TOKEN: 'PASTE_A_SEPARATE_TOKEN_OF_AT_LEAST_32_CHARACTERS'
 ```
 
-If you prefer an `.env` file, use `WEB_AUTH_ACCESS_TOKEN: ${WEB_AUTH_ACCESS_TOKEN}` instead. Both
-configuration styles are supported.
+Never reuse `KEYRING_PASSWORD` as this token. Browser sign-in over plain HTTP is limited to
+`localhost`. For access from another machine, place the dashboard behind an authenticated HTTPS
+reverse proxy or VPN. Only then add `WEB_AUTH_TRUST_PROXY: '1'` and bind the direct port to
+`127.0.0.1:4242:4242`.
 
-With plain HTTP, the sign-in form works only at `http://localhost:4242`. For a NAS dashboard opened
-from another device, first configure an HTTPS reverse proxy. Then add:
+## Native installation
 
-```yaml
-environment:
-  WEB_AUTH_TRUST_PROXY: '1'
+Docker is recommended on a NAS, but the application is not Docker-only. A native build requires
+[Bun](https://bun.sh/), Git, a C/C++ build toolchain, Python, and the platform dependencies needed
+by `keytar`.
+
+```bash
+git clone https://github.com/Robje007/proton-drive-sync.git
+cd proton-drive-sync
+bun install
+bun run build
+bun link
+proton-drive-sync auth
+proton-drive-sync config
+proton-drive-sync start
 ```
 
-The proxy must set `X-Forwarded-Proto: https`. Do not leave the direct dashboard port reachable from
-the LAN when trusting proxy headers. If the reverse proxy runs on the NAS host, bind the port only
-to loopback:
+Native configuration is stored below the normal platform config/state directories. Run
+`proton-drive-sync config --help` for non-interactive commands and `proton-drive-sync start --help`
+for one-shot, watch, dry-run, and service options.
 
-```yaml
-ports:
-  - '127.0.0.1:4242:4242'
-```
+## Exclusions
 
-Also protect the complete dashboard with the reverse proxy's authentication, a VPN, or a strict
-firewall rule. `WEB_AUTH_ACCESS_TOKEN` protects the Proton sign-in endpoints; it does not turn the
-rest of the dashboard into a multi-user application. After a successful sign-in, the running sync
-process detects the new encrypted session automatically—no container restart is needed.
-
-## How mappings work
-
-A mapping connects a path visible to the application with a Proton Drive destination:
-
-```text
-/data/projects → /backupnas
-/data/photos   → /Photos/NAS
-```
-
-Rules and behavior:
-
-- The local path must exist inside the container or on the native host.
-- The remote root always begins with `/`.
-- Nested or otherwise overlapping local mappings are rejected.
-- Changing a remote root invalidates queued work made for the previous destination.
-- A root mapping does not produce double-slash remote paths.
-- This remains one-way local-to-Proton synchronization.
-
-Test with a small directory before enabling a large project tree.
-
-## Recommended project exclusions
-
-New installations automatically exclude generated dependency/cache directories:
+New configurations exclude common generated dependency directories:
 
 ```text
 node_modules
@@ -254,268 +211,39 @@ __pycache__
 venv
 ```
 
-Source code, dotfiles, build files, and `.git` remain included. Add more exclusions when needed:
-
-```bash
-sudo docker exec proton-drive-sync proton-drive-sync config exclude \
-  --path / \
-  --add '.next' 'dist' 'coverage'
-```
-
-List the effective configuration:
-
-```bash
-sudo docker exec proton-drive-sync proton-drive-sync config sync-dir --list
-sudo docker exec proton-drive-sync proton-drive-sync config exclude --list
-```
-
-## Persistent data
-
-| Container path              | Contents                                | Recommended storage      |
-| --------------------------- | --------------------------------------- | ------------------------ |
-| `/config/proton-drive-sync` | Configuration and encrypted credentials | Persistent named volume  |
-| `/state/proton-drive-sync`  | SQLite state, queues, locks, and logs   | Persistent named volume  |
-| `/data/...`                 | Local content being uploaded            | Bind mount from NAS/host |
-
-Config and state deliberately use separate volumes. This lets you retain authentication and
-mappings while starting with a fresh queue database during a migration.
-
-## CLI reference
-
-Inside Docker, prefix application commands with:
-
-```text
-sudo docker exec proton-drive-sync proton-drive-sync
-```
-
-| Command                  | Purpose                                   |
-| ------------------------ | ----------------------------------------- |
-| `auth`                   | Authenticate interactively, including 2FA |
-| `auth --logout`          | Remove stored Proton credentials          |
-| `status`                 | Show service and authentication status    |
-| `config get`             | Display configuration                     |
-| `config sync-dir --list` | List local-to-remote mappings             |
-| `config exclude --list`  | List exclusions                           |
-| `pause` / `resume`       | Pause or resume queue processing          |
-| `reconcile`              | Request a full filesystem scan            |
-| `logs` / `logs -f`       | Read application logs                     |
-| `unlock`                 | Remove only a verified stale process lock |
-| `reset`                  | Interactively reset selected state        |
-
-## Safe recovery commands
-
-Check state:
-
-```bash
-sudo docker exec proton-drive-sync proton-drive-sync status
-```
-
-Clear a stale lock safely:
-
-```bash
-sudo docker exec proton-drive-sync proton-drive-sync unlock
-```
-
-The command refuses to unlock a verified running process. There is no need to edit SQLite or remove
-the complete state volume.
-
-Pause and resume:
-
-```bash
-sudo docker exec proton-drive-sync proton-drive-sync pause
-sudo docker exec proton-drive-sync proton-drive-sync resume
-```
-
-View logs:
-
-```bash
-sudo docker logs --tail 100 -f proton-drive-sync
-```
-
-## Updating the container
-
-An update does not require re-authentication. Keep the existing volume declarations, volume names,
-`KEYRING_PASSWORD`, and bind mounts exactly as they are. Change only the image line in the Compose
-YAML:
-
-```yaml
-image: ghcr.io/robje007/proton-drive-sync:0.3.0-nas.4
-```
-
-Then run these commands from the directory containing the Compose YAML:
-
-```bash
-sudo docker pull ghcr.io/robje007/proton-drive-sync:0.3.0-nas.4
-sudo docker compose up -d --no-deps --force-recreate proton-drive-sync
-sudo docker logs --tail 100 -f proton-drive-sync
-```
-
-Pulling explicitly also works when an older Ugreen Compose file contains `pull_policy: never`.
-`docker compose up` replaces only the container; the named config and state volumes remain intact.
-Do not run `docker compose down -v`, because `-v` deletes named volumes.
-
-Verify the mounts after the update if desired:
-
-```bash
-sudo docker inspect proton-drive-sync --format '{{range .Mounts}}{{println .Destination "<-" .Name .Source}}{{end}}'
-```
-
-## Ugreen and restricted NAS kernels
-
-This Compose setup intentionally contains no container-level `fs.inotify.*` sysctls. Several NAS
-kernels reject them with:
-
-```text
-sysctl "fs.inotify.max_user_instances" is not in a separate kernel namespace
-```
-
-If limits need adjustment, configure them on the NAS host through the vendor-supported mechanism;
-do not add them to the container unless the NAS kernel explicitly supports namespaced sysctls.
-
-## Migrating from another image
-
-Credentials and configuration live in `/config/proton-drive-sync`. Sync history and process state
-live separately in `/state/proton-drive-sync`.
-
-To keep an existing login, mount the old config volume into the new container. A fresh state volume
-is recommended when migrating from a wrapper image that left stale jobs or PID locks. The first scan
-will rebuild state in bounded batches and recognize existing remote files and folders.
-
-Never publish `KEYRING_PASSWORD`, `.env`, `credentials.enc`, or a config-volume backup.
-
-## Native source installation
-
-Docker is the maintained release artifact for this fork, but the native CLI remains available from
-source for Linux, macOS, and Windows.
-
-Requirements:
-
-- [Bun](https://bun.sh/)
-- Git
-- the native build prerequisites required by the dependencies on your operating system
-
-Build a standalone binary for the current system:
-
-```bash
-git clone https://github.com/Robje007/proton-drive-sync.git
-cd proton-drive-sync
-bun install
-bun run build:css
-bun run build:bin
-./dist/proton-drive-sync --version
-```
-
-Run the interactive setup wizard:
-
-```bash
-./dist/proton-drive-sync setup
-```
-
-Or run directly in the foreground:
-
-```bash
-./dist/proton-drive-sync start --no-daemon
-```
-
-Native start-on-login/service management remains available through
-`proton-drive-sync service --help`. Native builds receive less NAS-focused testing than the
-published container image.
+Your source, dotfiles, and `.git` directory remain included unless you exclude them yourself. Large
+generated directories should be excluded instead of synchronized.
 
 ## Troubleshooting
 
-### Local path does not exist
+### “Local path does not exist”
 
-Inspect the paths visible inside the container:
+Use the container-side mount path, for example `/data/robin/Projects`.
 
-```bash
-sudo docker exec proton-drive-sync ls -la /data
-sudo docker exec proton-drive-sync ls -la /data/robin
-```
+### “Another instance is already running”
 
-Use the container path shown there in the dashboard.
+Do not start a second sync process with `docker exec`. The container already runs it. If no process
+is actually active, use the `unlock` command shown above.
 
-### Another instance is already running
+### Dashboard is not reachable
 
-Check status and clear only a verified stale lock:
+Check `sudo docker ps` for `0.0.0.0:4242->4242/tcp`, then inspect the logs. The dashboard must bind
+to `0.0.0.0` inside Docker; the image handles this automatically.
 
-```bash
-sudo docker exec proton-drive-sync proton-drive-sync status
-sudo docker exec proton-drive-sync proton-drive-sync unlock
-```
+### A project generates thousands of jobs
 
-Do not manually edit the SQLite state database. The unlock command refuses to remove a lock owned
-by a verified live process.
+Exclude dependency, cache, build-output, and virtual-environment folders. Source-control working
+trees usually do not need `node_modules` synchronized.
 
-### Authentication disappeared after migration
-
-Verify that the original config volume is mounted at `/config/proton-drive-sync`, the same
-`KEYRING_PASSWORD` is configured, and `credentials.enc` exists. Re-authenticate if necessary:
-
-```bash
-sudo docker exec -it proton-drive-sync proton-drive-sync auth
-```
-
-No restart is required afterward.
-
-### Generated folders are still queued
-
-Check exclusions, add the missing pattern, and reconcile:
-
-```bash
-sudo docker exec proton-drive-sync proton-drive-sync config exclude --list
-sudo docker exec proton-drive-sync proton-drive-sync config exclude --path / --add 'node_modules'
-sudo docker exec proton-drive-sync proton-drive-sync reconcile
-```
-
-Queued entries are revalidated before upload, so newly excluded items are discarded safely.
-
-### Dashboard cannot be reached
-
-```bash
-sudo docker ps --filter name=proton-drive-sync
-sudo docker logs --tail 200 proton-drive-sync
-```
-
-Confirm the port mapping and check whether another service already uses host port 4242. For a
-mapping such as `4343:4242`, open port 4343 in the browser.
-
-## Security and backups
-
-- Never publish a Compose YAML containing real keys.
-- Never publish `credentials.enc`, a config-volume backup, or dashboard tokens.
-- Protect the dashboard from untrusted networks.
-- Store the encryption key separately from the config-volume backup.
-- Test restoring files from Proton Drive; a successful upload is not itself a tested restore.
-
-## Local development
-
-Requirements: Bun and Docker/Podman.
+## Development
 
 ```bash
 bun install
 bun run build:check
 bun test
-bun run build:css
-bun run build:bin
+bun run build
 ```
 
-Build the container:
+Contributions and beta reports are welcome on GitHub. This project is GPL-3.0 licensed.
 
-```bash
-sudo docker build -f docker/Dockerfile -t proton-nas-sync:dev .
-```
-
-## Support
-
-Proton NAS Sync is maintained as an independent community project. You can support continued NAS
-testing and development at [ko-fi.com/robje007](https://ko-fi.com/robje007).
-
-## Upstream and license
-
-Proton NAS Sync is a modified version of
-[DamianB-BitFlipper/proton-drive-sync](https://github.com/DamianB-BitFlipper/proton-drive-sync).
-The original work and this fork are distributed under the GNU General Public License v3.0. Modified
-versions must remain under GPL-3.0 when distributed, include the license, provide corresponding
-source, and be clearly identified as modified.
-
-See [LICENSE](LICENSE) for the complete license text.
+[Ko-fi: ko-fi.com/robje007](https://ko-fi.com/robje007)

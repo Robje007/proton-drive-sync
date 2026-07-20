@@ -144,7 +144,9 @@ export function getCommand(key: string | undefined, options: GetOptions): void {
     if (config.sync_dirs && config.sync_dirs.length > 0) {
       console.log('\n  sync_dirs:');
       for (const dir of config.sync_dirs) {
-        console.log(`    - ${dir.source_path} -> ${dir.remote_root}`);
+        console.log(
+          `    - ${dir.source_path} -> ${dir.remote_root} [${dir.sync_mode || 'upload'}]`
+        );
       }
     } else {
       console.log('\n  sync_dirs: (none configured)');
@@ -366,6 +368,7 @@ interface SyncDirOptions {
   list?: boolean;
   add?: string;
   remote?: string;
+  twoWay?: boolean;
   remove?: string;
 }
 
@@ -381,7 +384,7 @@ export async function syncDirCommand(options: SyncDirOptions): Promise<void> {
 
   // Non-interactive: --add
   if (options.add) {
-    addSyncDir(options.add, options.remote ?? '/');
+    addSyncDir(options.add, options.remote ?? '/', options.twoWay ? 'two_way' : 'upload');
     return;
   }
 
@@ -406,11 +409,15 @@ function listSyncDirs(): void {
 
   console.log('Sync directories:\n');
   for (const dir of config.sync_dirs) {
-    console.log(`  ${dir.source_path} -> ${dir.remote_root}`);
+    console.log(`  ${dir.source_path} -> ${dir.remote_root} [${dir.sync_mode || 'upload'}]`);
   }
 }
 
-function addSyncDir(sourcePath: string, remoteRoot: string): void {
+function addSyncDir(
+  sourcePath: string,
+  remoteRoot: string,
+  syncMode: 'upload' | 'two_way' = 'upload'
+): void {
   sourcePath = normalizeLocalRoot(sourcePath);
 
   // Validate source path exists
@@ -438,7 +445,7 @@ function addSyncDir(sourcePath: string, remoteRoot: string): void {
     return;
   }
 
-  syncDirs.push({ source_path: sourcePath, remote_root: remoteRoot });
+  syncDirs.push({ source_path: sourcePath, remote_root: remoteRoot, sync_mode: syncMode });
   config.sync_dirs = syncDirs;
   saveConfigRaw(config);
   console.log(`Added sync directory: ${sourcePath} -> ${remoteRoot}`);
@@ -472,7 +479,7 @@ async function syncDirInteractive(): Promise<void> {
     } else {
       console.log('Current sync directories:');
       for (const dir of syncDirs) {
-        console.log(`  ${dir.source_path} -> ${dir.remote_root}`);
+        console.log(`  ${dir.source_path} -> ${dir.remote_root} [${dir.sync_mode || 'upload'}]`);
       }
     }
     console.log('');
@@ -509,7 +516,12 @@ async function syncDirInteractive(): Promise<void> {
         default: '/',
       });
 
-      addSyncDir(sourcePath, remoteRoot);
+      const useTwoWay = await confirm({
+        message: 'Enable two-way sync beta for this mapping?',
+        default: false,
+      });
+
+      addSyncDir(sourcePath, remoteRoot, useTwoWay ? 'two_way' : 'upload');
     }
 
     if (action === 'remove') {

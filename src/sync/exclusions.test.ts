@@ -28,4 +28,13 @@ describe('exclusions', () => {
   test('rejects absolute globs', () => {
     expect(validateGlob('/node_modules').valid).toBe(false);
   });
+
+  test('always excludes two-way safety folders', () => {
+    expect(
+      isPathExcluded('/data/Projects/.proton-sync-conflicts/2026/file.txt', '/data/Projects', [])
+    ).toBe(true);
+    expect(
+      isPathExcluded('/data/Projects/.proton-sync-recovery/file.txt', '/data/Projects', [])
+    ).toBe(true);
+  });
 });

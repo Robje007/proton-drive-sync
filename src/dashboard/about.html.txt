@@ -23,7 +23,7 @@
         <li>• Batched, exclusion-aware project scans</li>
         <li>• Safe queue rebuilds after mapping changes</li>
         <li>• Docker authentication without restart</li>
-        <li>• Clear one-way backup semantics</li>
+        <li>• Opt-in two-way sync beta with conflict recovery</li>
       </ul>
     </section>
     <section class="rounded-2xl border border-white/8 bg-white/4 p-6">

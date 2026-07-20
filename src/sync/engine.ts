@@ -50,6 +50,8 @@ import {
 } from './nodes.js';
 import { isPathExcluded } from './exclusions.js';
 import { buildRemotePath, normalizeLocalRoot } from './paths.js';
+import { startTwoWaySync, type TwoWayHandle } from './twoWay.js';
+import { isRemoteApplication } from './remoteEcho.js';
 import {
   JOB_POLL_INTERVAL_MS,
   SHUTDOWN_TIMEOUT_MS,
@@ -157,6 +159,11 @@ async function handleFileChange(file: FileChange, config: Config, dryRun: boolea
   }
 
   const { localPath, remotePath } = target;
+
+  if (isRemoteApplication(localPath)) {
+    logger.debug(`[two-way beta] Suppressed local echo: ${file.name}`);
+    return;
+  }
 
   // Check if path is excluded
   const excludePatterns = getConfig().exclude_patterns;
@@ -304,6 +311,11 @@ export async function runOneShotSync(options: SyncOptions): Promise<void> {
     cleanupOrphanedChangeTokens(tx);
   });
 
+  // Pull remote changes first so the local scan observes the new baseline and
+  // does not echo downloaded files straight back as uploads.
+  const twoWayHandle = await startTwoWaySync(client, config, dryRun);
+  twoWayHandle.stop();
+
   // Query all changes and enqueue jobs
   const totalChanges = await queryAllChanges(config, (files) =>
     handleFileChangeBatch(files, config, dryRun)
@@ -354,6 +366,10 @@ export async function runWatchMode(options: SyncOptions): Promise<void> {
   await setupWatchSubscriptions(config, createChangeHandler());
   const processorHandle = startJobProcessorLoop(client, dryRun);
 
+  // Establish the remote baseline before the local startup scan. Downloaded
+  // files are recorded in file_state, suppressing watcher echo uploads.
+  let twoWayHandle: TwoWayHandle = await startTwoWaySync(client, config, dryRun);
+
   // Scan for changes that happened while we were offline
   logger.info('Checking for changes since last run...');
   const totalChanges = await queryAllChanges(config, createChangeHandler());
@@ -384,6 +400,8 @@ export async function runWatchMode(options: SyncOptions): Promise<void> {
         });
 
         await setupWatchSubscriptions(newConfig, createChangeHandler());
+        twoWayHandle.stop();
+        twoWayHandle = await startTwoWaySync(client, newConfig, dryRun);
         logger.info('Checking configured directories in bounded batches...');
         const totalChanges = await queryAllChanges(newConfig, createChangeHandler());
         if (totalChanges > 0) logger.info(`Queued ${totalChanges} current changes`);
@@ -427,6 +445,7 @@ export async function runWatchMode(options: SyncOptions): Promise<void> {
 
   // Cleanup
   reconciliationHandle.stop();
+  twoWayHandle.stop();
   await processorHandle.stop();
 }
 

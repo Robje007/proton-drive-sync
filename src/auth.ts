@@ -1250,7 +1250,7 @@ interface HttpClientRequest {
   url: string;
   method: string;
   headers: Headers;
-  json?: Record<string, unknown>;
+  json?: object;
   body?: BodyInit;
   timeoutMs: number;
   signal?: AbortSignal;
@@ -1292,6 +1292,7 @@ interface SRPModuleInterface {
     password: string
   ): Promise<SrpResult>;
   getSrpVerifier(password: string): Promise<SRPVerifier>;
+  generateKeySalt(): string;
   computeKeyPassword(password: string, salt: string): Promise<string>;
 }
 
@@ -1514,6 +1515,10 @@ export function createProtonAccount(
  */
 export function createSrpModule(): SRPModuleInterface {
   return {
+    generateKeySalt(): string {
+      return base64Encode(crypto.getRandomValues(new Uint8Array(16)));
+    },
+
     async getSrp(
       version: number,
       modulus: string,

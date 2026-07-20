@@ -116,14 +116,21 @@ export function isPathExcluded(
   syncDirPath: string,
   excludePatterns: ExcludePattern[]
 ): boolean {
-  if (!excludePatterns || excludePatterns.length === 0) {
-    return false;
-  }
-
   // Compute relative path from sync dir
   const relativePath = relative(syncDirPath, absolutePath);
   if (!relativePath) {
     // Path is the sync dir itself, don't exclude
+    return false;
+  }
+
+  // Internal two-way safety data must never be uploaded back to Drive.
+  if (
+    /(^|\/)\.proton-sync-(conflicts|recovery|tmp)(\/|$)/.test(relativePath.split('\\').join('/'))
+  ) {
+    return true;
+  }
+
+  if (!excludePatterns || excludePatterns.length === 0) {
     return false;
   }
 

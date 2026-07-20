@@ -140,7 +140,7 @@
     <div
       class="text-sm text-gray-400 bg-gray-800/50 rounded-lg px-4 py-3 border border-gray-700/50 mb-6"
     >
-      This is a one-way local → Proton Drive uploader. Advanced options remain available through
+      Choose upload-only or enable two-way beta per mapping. Advanced options remain available through
       <code class="text-gray-300 bg-gray-700 px-1.5 py-0.5 rounded">proton-drive-sync config</code>.
     </div>
 

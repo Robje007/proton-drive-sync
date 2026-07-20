@@ -95,6 +95,7 @@ configCmd
   .option('--list', 'List sync directories')
   .option('--add <path>', 'Add sync directory')
   .option('--remote <remote>', 'Remote root for --add (default: /)')
+  .option('--two-way', 'Enable two-way beta for the new mapping')
   .option('--remove <path>', 'Remove sync directory')
   .action(syncDirCommand);
 

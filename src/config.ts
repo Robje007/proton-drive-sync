@@ -26,7 +26,11 @@ import {
 export interface SyncDir {
   source_path: string;
   remote_root: string;
+  /** Upload-only is the safe default; two_way also applies remote changes locally. */
+  sync_mode?: SyncMode;
 }
+
+export type SyncMode = 'upload' | 'two_way';
 
 export interface ExcludePattern {
   path: string; // "/" for global (all sync dirs), or absolute path
@@ -188,6 +192,13 @@ function parseConfig(throwOnError: boolean): Config | null {
 
       dir.source_path = normalizeLocalRoot(dir.source_path);
       dir.remote_root = normalizeRemoteRoot(dir.remote_root || '/');
+      dir.sync_mode = dir.sync_mode || 'upload';
+      if (dir.sync_mode !== 'upload' && dir.sync_mode !== 'two_way') {
+        const msg = `Invalid sync mode for ${dir.source_path}: ${String(dir.sync_mode)}`;
+        if (throwOnError) throw new Error(msg);
+        logger.error(msg);
+        return null;
+      }
 
       if (!existsSync(dir.source_path)) {
         const msg = `Sync directory does not exist: ${dir.source_path}`;
