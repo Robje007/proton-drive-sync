@@ -7,7 +7,7 @@
 ## Setup
 
 ```bash
-git clone https://github.com/damianb-bitflipper/proton-drive-sync
+git clone https://github.com/Robje007/proton-drive-sync
 cd proton-drive-sync
 make install
 ```
@@ -22,10 +22,10 @@ make dev
 
 This runs `start --no-daemon` automatically. Use `Ctrl+C` to stop.
 
-For one-off commands (like service install), use `make run`:
+For one-off CLI commands, use `make run`:
 
 ```bash
-make run ARGS="service install"
+make run ARGS="status"
 ```
 
 ## Make Commands
@@ -39,11 +39,21 @@ make run ARGS="service install"
 | `make db-inspect` | Open Drizzle Studio to inspect database |
 | `make help`       | Show all available commands             |
 
+## Container development
+
+Build and smoke-test the same image used by NAS installations:
+
+```bash
+sudo docker build -f docker/Dockerfile -t proton-nas-sync:dev .
+sudo docker run --rm --entrypoint proton-drive-sync proton-nas-sync:dev --version
+```
+
 ## Publishing
 
 To publish a new version:
 
 1. Update version in `package.json`
-2. Create a new release with the respective tag
+2. Merge the version change into `main`
 
-The GitHub Actions release workflow will automatically build binaries for all platforms.
+The auto-tag workflow creates the version tag and dispatches the multi-architecture container
+build. Verify both AMD64 and ARM64 jobs and the final GHCR manifest before announcing the release.
