@@ -5,6 +5,7 @@
  */
 
 import { eq, like } from 'drizzle-orm';
+import { readFileSync } from 'fs';
 import { db, schema } from './db/index.js';
 
 // Flag names
@@ -144,15 +145,60 @@ function isProcessRunning(pid: number): boolean {
   }
 }
 
+/** Read the Linux kernel start-time tick for a PID to distinguish PID reuse. */
+function getProcessStartId(pid: number): string | null {
+  if (process.platform !== 'linux') return null;
+
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const commandEnd = stat.lastIndexOf(')');
+    if (commandEnd === -1) return null;
+    const fieldsAfterCommand = stat
+      .slice(commandEnd + 2)
+      .trim()
+      .split(/\s+/);
+    return fieldsAfterCommand[19] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Parse a lock value stored as pid,start-id (legacy values contain only a PID). */
+function parseRunLock(value: string): { pid: number; startId: string | null } | null {
+  const [pidValue, startId] = value.split(',', 2);
+  const pid = Number.parseInt(pidValue, 10);
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  return { pid, startId: startId || null };
+}
+
+/** Check both PID and process birth time, preventing false locks after container restarts. */
+function isRunLockOwnerAlive(value: string): boolean {
+  const lock = parseRunLock(value);
+  if (!lock || !isProcessRunning(lock.pid)) return false;
+
+  if (lock.startId) {
+    return getProcessStartId(lock.pid) === lock.startId;
+  }
+
+  // Legacy locks only contain a PID. On Linux, verify that it still belongs to this app.
+  if (process.platform === 'linux') {
+    try {
+      const commandLine = readFileSync(`/proc/${lock.pid}/cmdline`, 'utf8');
+      return commandLine.includes('proton-drive-sync');
+    } catch {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 /**
  * Check if a proton-drive-sync process is currently running.
  */
 export function isAlreadyRunning(): boolean {
-  const pidStr = getFlagData(RUNNING_PID_FLAG);
-  if (!pidStr) return false;
-  const pid = parseInt(pidStr, 10);
-  if (isNaN(pid)) return false;
-  return isProcessRunning(pid);
+  const lockValue = getFlagData(RUNNING_PID_FLAG);
+  return lockValue ? isRunLockOwnerAlive(lockValue) : false;
 }
 
 /**
@@ -177,26 +223,38 @@ export function isStartupReady(): boolean {
 export function acquireRunLock(): boolean {
   return db.transaction((tx) => {
     // Check if another process holds the lock
-    const pidStr = getFlagData(RUNNING_PID_FLAG, tx);
+    const lockValue = getFlagData(RUNNING_PID_FLAG, tx);
 
-    if (pidStr) {
-      const pid = parseInt(pidStr, 10);
-      if (!isNaN(pid) && isProcessRunning(pid)) {
+    if (lockValue) {
+      if (isRunLockOwnerAlive(lockValue)) {
         // Process is still running, can't acquire lock
         return false;
       }
       // Process is dead, clear stale lock
-      clearFlag(RUNNING_PID_FLAG, pidStr, tx);
+      clearFlag(RUNNING_PID_FLAG, lockValue, tx);
     }
 
     // Clear all stale signals
     tx.delete(schema.signals).run();
 
     // Store our PID as the lock
-    setFlag(RUNNING_PID_FLAG, String(process.pid), tx);
+    const startId = getProcessStartId(process.pid);
+    setFlag(RUNNING_PID_FLAG, startId ? `${process.pid},${startId}` : String(process.pid), tx);
 
     return true;
   });
+}
+
+/** Remove a stale run lock, but never unlock a verified live process. */
+export function clearStaleRunLock(): boolean {
+  const lockValue = getFlagData(RUNNING_PID_FLAG);
+  if (!lockValue) return false;
+  if (isRunLockOwnerAlive(lockValue)) {
+    throw new Error('Refusing to clear lock: a proton-drive-sync process is still running');
+  }
+  clearFlag(RUNNING_PID_FLAG, ALL_VARIANTS);
+  clearFlag(FLAGS.STARTUP_READY);
+  return true;
 }
 
 /**

@@ -7,6 +7,153 @@
   const ICON_INFO = `{{ICON_INFO_SMALL}}`;
   const ICON_TRASH = `{{ICON_TRASH}}`;
 
+  let webAuthChallengeId = null;
+  let webAuthStep = null;
+
+  function webAuthElements() {
+    return {
+      section: document.getElementById('web-auth-section'),
+      unavailable: document.getElementById('web-auth-unavailable'),
+      loginForm: document.getElementById('web-auth-login-form'),
+      challengeForm: document.getElementById('web-auth-challenge-form'),
+      challengeLabel: document.getElementById('web-auth-challenge-label'),
+      challengeValue: document.getElementById('web-auth-challenge-value'),
+      message: document.getElementById('web-auth-message'),
+    };
+  }
+
+  function setWebAuthBusy(busy) {
+    document.getElementById('web-auth-login-button').disabled = busy;
+    document.getElementById('web-auth-challenge-button').disabled = busy;
+  }
+
+  function resetWebAuth() {
+    const elements = webAuthElements();
+    webAuthChallengeId = null;
+    webAuthStep = null;
+    elements.challengeValue.value = '';
+    elements.challengeForm.classList.add('hidden');
+    elements.loginForm.classList.remove('hidden');
+    elements.message.textContent = '';
+  }
+
+  function showWebAuthStep(result) {
+    const elements = webAuthElements();
+    webAuthChallengeId = result.challengeId;
+    webAuthStep = result.step;
+    elements.loginForm.classList.add('hidden');
+    elements.challengeForm.classList.remove('hidden');
+    elements.challengeValue.value = '';
+    if (result.step === 'mailbox_password') {
+      elements.challengeLabel.textContent = 'Proton mailbox password';
+      elements.challengeValue.type = 'password';
+      elements.challengeValue.inputMode = 'text';
+      elements.challengeValue.autocomplete = 'current-password';
+    } else {
+      elements.challengeLabel.textContent = 'Two-factor authentication code';
+      elements.challengeValue.type = 'text';
+      elements.challengeValue.inputMode = 'numeric';
+      elements.challengeValue.autocomplete = 'one-time-code';
+    }
+    elements.message.textContent = 'Complete the additional Proton verification step.';
+    elements.challengeValue.focus();
+  }
+
+  async function webAuthRequest(path, body) {
+    const response = await fetch(path, {
+      method: 'POST',
+      credentials: 'same-origin',
+      referrerPolicy: 'no-referrer',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Proton-NAS-Sync': '1',
+      },
+      body: JSON.stringify(body),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Authentication failed.');
+    return result;
+  }
+
+  async function initializeWebAuth() {
+    const elements = webAuthElements();
+    try {
+      const response = await fetch('/api/web-auth/capabilities', {
+        credentials: 'same-origin',
+        cache: 'no-store',
+      });
+      const capabilities = await response.json();
+      if (!capabilities.enabled) return;
+      elements.section.classList.remove('hidden');
+      if (!capabilities.available) {
+        elements.loginForm.classList.add('hidden');
+        elements.unavailable.classList.remove('hidden');
+        elements.unavailable.textContent = capabilities.reason || 'Web login is unavailable.';
+      }
+    } catch {
+      // Keep the opt-in section hidden when capability detection fails.
+    }
+  }
+
+  document.getElementById('web-auth-login-form').addEventListener('submit', async function (event) {
+    event.preventDefault();
+    const elements = webAuthElements();
+    setWebAuthBusy(true);
+    elements.message.textContent = 'Contacting Proton…';
+    try {
+      const result = await webAuthRequest('/api/web-auth/login', {
+        accessToken: document.getElementById('web-auth-access-token').value,
+        username: document.getElementById('web-auth-username').value,
+        password: document.getElementById('web-auth-password').value,
+      });
+      document.getElementById('web-auth-password').value = '';
+      if (result.step === 'complete') {
+        document.getElementById('web-auth-access-token').value = '';
+        elements.message.textContent = 'Signed in. Sync will start automatically; no restart is needed.';
+        showToast('Proton authentication saved', 'success');
+      } else {
+        showWebAuthStep(result);
+      }
+    } catch (error) {
+      document.getElementById('web-auth-password').value = '';
+      elements.message.textContent = error.message;
+    } finally {
+      setWebAuthBusy(false);
+    }
+  });
+
+  document.getElementById('web-auth-challenge-form').addEventListener('submit', async function (event) {
+    event.preventDefault();
+    const elements = webAuthElements();
+    const value = elements.challengeValue.value;
+    setWebAuthBusy(true);
+    elements.message.textContent = 'Verifying…';
+    try {
+      const result = await webAuthRequest('/api/web-auth/challenge', {
+        accessToken: document.getElementById('web-auth-access-token').value,
+        challengeId: webAuthChallengeId,
+        ...(webAuthStep === 'mailbox_password' ? { mailboxPassword: value } : { code: value }),
+      });
+      elements.challengeValue.value = '';
+      if (result.step === 'complete') {
+        document.getElementById('web-auth-access-token').value = '';
+        elements.challengeForm.classList.add('hidden');
+        elements.message.textContent = 'Signed in. Sync will start automatically; no restart is needed.';
+        showToast('Proton authentication saved', 'success');
+      } else {
+        showWebAuthStep(result);
+      }
+    } catch (error) {
+      elements.challengeValue.value = '';
+      elements.message.textContent = error.message;
+    } finally {
+      setWebAuthBusy(false);
+    }
+  });
+
+  document.getElementById('web-auth-cancel-button').addEventListener('click', resetWebAuth);
+  initializeWebAuth();
+
   function renderSyncDirs() {
     const container = document.getElementById('sync-dirs-list');
     const noMessage = document.getElementById('no-dirs-message');

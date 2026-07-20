@@ -28,6 +28,19 @@ import { sendSignal } from '../signals.js';
 import { logger, enableIpcLogging } from '../logger.js';
 import { chownToEffectiveUser } from '../paths.js';
 import { CONFIG_FILE, CONFIG_CHECK_SIGNAL, defaultConfig } from '../config.js';
+import { ProtonAuth, initCrypto } from '../auth.js';
+import { storeCredentials } from '../keychain.js';
+import type { ApiError } from '../proton/types.js';
+import { findOverlappingSyncDir, normalizeLocalRoot, normalizeRemoteRoot } from '../sync/paths.js';
+import {
+  WebAuthRateLimiter,
+  accessTokenMatches,
+  getWebAuthSettings,
+  isSameOriginWebAuthRequest,
+  isTransportAllowed,
+  webAuthConfigurationError,
+  type WebAuthRequestInfo,
+} from './web-auth.js';
 import {
   type AuthStatusUpdate,
   type DashboardJob,
@@ -72,16 +85,11 @@ import aboutScriptsHtml from './scripts/about.scripts.txt';
 
 // Embed assets at compile time (required for compiled binaries)
 import iconSvg from './assets/icon.svg' with { type: 'text' };
-import githubSvg from './assets/github.svg' with { type: 'text' };
-import xLogoSvg from './assets/x-logo.svg' with { type: 'text' };
 import stylesCss from './assets/styles.css' with { type: 'text' };
-import damianJpgPath from './assets/damian.jpg' with { type: 'file' };
 
 // Asset map for serving embedded assets
 const embeddedAssets: Record<string, { content: string; type: string }> = {
   'icon.svg': { content: iconSvg, type: 'image/svg+xml' },
-  'github.svg': { content: githubSvg, type: 'image/svg+xml' },
-  'x-logo.svg': { content: xLogoSvg, type: 'image/svg+xml' },
   'styles.css': { content: stylesCss, type: 'text/css' },
 };
 
@@ -170,6 +178,27 @@ let currentAuthStatus: AuthStatusUpdate = { status: 'unauthenticated' };
 let currentSyncStatus: SyncStatus = 'disconnected';
 let currentConfig: Config | null = null;
 let loggedAuthUser: string | null = null; // Track logged auth to avoid duplicate logs
+
+interface RequestConnection {
+  clientAddress: string;
+}
+
+type WebAuthStep = 'two_factor' | 'mailbox_password';
+
+interface PendingWebAuth {
+  auth: ProtonAuth;
+  username: string;
+  step: WebAuthStep;
+  clientAddress: string;
+  expiresAt: number;
+}
+
+const WEB_AUTH_CHALLENGE_TTL_MS = 5 * 60 * 1000;
+const WEB_AUTH_MAX_CHALLENGES = 20;
+const requestConnections = new WeakMap<Request, RequestConnection>();
+const webAuthSettings = getWebAuthSettings();
+const webAuthRateLimiter = new WebAuthRateLimiter();
+const pendingWebAuth = new Map<string, PendingWebAuth>();
 
 /**
  * Read and process messages from parent process via stdin.
@@ -618,6 +647,67 @@ export function renderFragment(key: FragmentKey, s: DashboardSnapshot): string {
 const app = new Hono();
 let isDryRun = false;
 
+function getWebAuthRequestInfo(request: Request): WebAuthRequestInfo {
+  const headers = request.headers;
+  return {
+    url: request.url,
+    clientAddress: requestConnections.get(request)?.clientAddress || 'unknown',
+    origin: headers.get('origin'),
+    host: headers.get('host'),
+    forwardedHost: headers.get('x-forwarded-host'),
+    forwardedProto: headers.get('x-forwarded-proto'),
+    fetchSite: headers.get('sec-fetch-site'),
+    marker: headers.get('x-proton-nas-sync'),
+  };
+}
+
+function removeExpiredWebAuthChallenges(now = Date.now()): void {
+  for (const [id, challenge] of pendingWebAuth) {
+    if (challenge.expiresAt <= now) pendingWebAuth.delete(id);
+  }
+}
+
+function createWebAuthChallenge(
+  auth: ProtonAuth,
+  username: string,
+  step: WebAuthStep,
+  clientAddress: string
+): string {
+  removeExpiredWebAuthChallenges();
+  for (const [id, challenge] of pendingWebAuth) {
+    if (challenge.clientAddress === clientAddress) pendingWebAuth.delete(id);
+  }
+  if (pendingWebAuth.size >= WEB_AUTH_MAX_CHALLENGES) {
+    const oldest = pendingWebAuth.keys().next().value as string | undefined;
+    if (oldest) pendingWebAuth.delete(oldest);
+  }
+
+  const id = crypto.randomUUID();
+  pendingWebAuth.set(id, {
+    auth,
+    username,
+    step,
+    clientAddress,
+    expiresAt: Date.now() + WEB_AUTH_CHALLENGE_TTL_MS,
+  });
+  return id;
+}
+
+async function completeWebAuthentication(
+  id: string | null,
+  challenge: PendingWebAuth
+): Promise<void> {
+  const credentials = challenge.auth.getReusableCredentials();
+  await storeCredentials({ ...credentials, username: challenge.username });
+  if (id) pendingWebAuth.delete(id);
+  currentAuthStatus = { status: 'authenticating' };
+  statusEvents.emit('status', { auth: currentAuthStatus, syncStatus: currentSyncStatus });
+}
+
+function webAuthErrorMessage(): string {
+  return 'Authentication failed. Check the supplied details and try again.';
+}
+
 /** Get controls scripts with all values injected */
 function controlsScriptsWithValues(
   isOnboarding: boolean,
@@ -649,16 +739,16 @@ async function composePage(
   const hideTabsDuringOnboarding = !onboardingState;
   const homeTabClass =
     options.activeTab === 'home'
-      ? 'text-white border-b-2 border-white'
-      : 'text-gray-400 hover:text-white';
+      ? 'bg-white/10 text-white'
+      : 'text-slate-400 hover:bg-white/5 hover:text-white';
   const controlsTabClass =
     options.activeTab === 'controls'
-      ? 'text-white border-b-2 border-white'
-      : 'text-gray-400 hover:text-white';
+      ? 'bg-white/10 text-white'
+      : 'text-slate-400 hover:bg-white/5 hover:text-white';
   const aboutTabClass =
     options.activeTab === 'about'
-      ? 'text-white border-b-2 border-white'
-      : 'text-gray-400 hover:text-white';
+      ? 'bg-white/10 text-white'
+      : 'text-slate-400 hover:bg-white/5 hover:text-white';
 
   // Get current state for server-side rendering of badges
   const s = snapshot();
@@ -698,11 +788,13 @@ function getLayout(): string {
 
 // Serve dashboard HTML at root
 app.get('/', async (c) => {
-  // Redirect to controls if not onboarded
+  // A state reset must not force an already configured installation through
+  // onboarding again. Existing mappings are sufficient to open the dashboard.
   const onboardingState = getFlagData(FLAGS.ONBOARDING);
-  if (!onboardingState) {
+  if (!onboardingState && (currentConfig?.sync_dirs.length ?? 0) === 0) {
     return c.redirect('/controls');
   }
+  if (!onboardingState) setFlag(FLAGS.ONBOARDING, ONBOARDING_STATE.COMPLETED);
   const layout = getLayout();
   const s = snapshot();
 
@@ -725,7 +817,7 @@ app.get('/', async (c) => {
     );
 
   const html = await composePage(layout, homeContent, {
-    title: 'Proton Drive Sync',
+    title: 'Proton NAS Sync',
     activeTab: 'home',
     pageScripts: homeScriptsHtml,
   });
@@ -801,11 +893,6 @@ app.get('/about', async (c) => {
   const showStartButton = onboardingState === ONBOARDING_STATE.ABOUT;
   content = content.replace('{{HIDE_START_BUTTON}}', showStartButton ? '' : 'hidden');
 
-  // Replace icon placeholders
-  content = content
-    .replace('{{ICON_HEART}}', icon('heart', 'w-4 h-4 text-gray-500').toString())
-    .replace('{{ICON_ROCKET}}', icon('rocket', 'w-4 h-4 ml-1').toString());
-
   const html = await composePage(layout, content, {
     title: 'About - Proton Drive Sync',
     activeTab: 'about',
@@ -822,14 +909,6 @@ app.get('/assets/:filename', async (c) => {
   if (filename in embeddedAssets) {
     const asset = embeddedAssets[filename];
     return c.body(asset.content, 200, { 'Content-Type': asset.type });
-  }
-
-  // Handle damian.jpg using the embedded file path
-  if (filename === 'damian.jpg') {
-    const file = Bun.file(damianJpgPath);
-    return new Response(file, {
-      headers: { 'Content-Type': 'image/jpeg' },
-    });
   }
 
   return c.notFound();
@@ -990,6 +1069,33 @@ app.get('/api/config', (c) => {
   return c.json({ dryRun: isDryRun, config: currentConfig });
 });
 
+/** Validate and canonicalize dashboard-provided sync directory mappings. */
+function normalizeSyncDirs(syncDirs: Config['sync_dirs']): Config['sync_dirs'] {
+  const normalized: Config['sync_dirs'] = [];
+
+  for (const dir of syncDirs) {
+    const sourcePath = normalizeLocalRoot(dir.source_path);
+    const remoteRoot = normalizeRemoteRoot(dir.remote_root || '/');
+
+    try {
+      statSync(sourcePath);
+    } catch {
+      throw new Error(`Local path does not exist: ${sourcePath}`);
+    }
+
+    const overlap = findOverlappingSyncDir(sourcePath, normalized);
+    if (overlap) {
+      throw new Error(
+        `Local path overlaps an existing mapping: ${sourcePath} overlaps ${overlap.source_path}`
+      );
+    }
+
+    normalized.push({ source_path: sourcePath, remote_root: remoteRoot });
+  }
+
+  return normalized;
+}
+
 /** Save config and trigger reload */
 app.post('/api/config', async (c) => {
   try {
@@ -1007,6 +1113,7 @@ app.post('/api/config', async (c) => {
     if (typeof newConfig.sync_concurrency !== 'number' || newConfig.sync_concurrency < 1) {
       return c.json({ error: 'sync_concurrency must be a positive number' }, 400);
     }
+    newConfig.sync_dirs = normalizeSyncDirs(newConfig.sync_dirs);
 
     // Write to config file
     await Bun.write(CONFIG_FILE, JSON.stringify(newConfig, null, 2));
@@ -1016,7 +1123,7 @@ app.post('/api/config', async (c) => {
     currentConfig = newConfig;
 
     // Mark as onboarded (shows home tab)
-    setFlag(FLAGS.ONBOARDING, ONBOARDING_STATE.ABOUT);
+    setFlag(FLAGS.ONBOARDING, ONBOARDING_STATE.COMPLETED);
 
     // Send signal to trigger config reload in sync process
     sendSignal(CONFIG_CHECK_SIGNAL);
@@ -1031,11 +1138,11 @@ app.post('/api/config', async (c) => {
 app.post('/api/add-directory', async (c) => {
   try {
     const formData = await c.req.parseBody();
-    const sourcePath = ((formData.source_path as string) || '').trim();
-    const remoteRoot = ((formData.remote_root as string) || '/').trim();
+    const sourcePathInput = ((formData.source_path as string) || '').trim();
+    const remoteRootInput = ((formData.remote_root as string) || '/').trim();
 
     // Validate source_path is provided
-    if (!sourcePath) {
+    if (!sourcePathInput) {
       return c.html('', 400, {
         'HX-Reswap': 'none',
         'HX-Trigger': JSON.stringify({
@@ -1044,15 +1151,8 @@ app.post('/api/add-directory', async (c) => {
       });
     }
 
-    // Validate remote_root starts with /
-    if (remoteRoot && !remoteRoot.startsWith('/')) {
-      return c.html('', 400, {
-        'HX-Reswap': 'none',
-        'HX-Trigger': JSON.stringify({
-          showToast: { message: 'Remote root must start with /', type: 'error' },
-        }),
-      });
-    }
+    const sourcePath = normalizeLocalRoot(sourcePathInput);
+    const remoteRoot = normalizeRemoteRoot(remoteRootInput);
 
     // Validate local path exists on filesystem (works for both files and directories)
     let pathExists = false;
@@ -1071,12 +1171,26 @@ app.post('/api/add-directory', async (c) => {
       });
     }
 
+    const existingDirs = currentConfig?.sync_dirs || [];
+    const overlap = findOverlappingSyncDir(sourcePath, existingDirs);
+    if (overlap) {
+      return c.html('', 400, {
+        'HX-Reswap': 'none',
+        'HX-Trigger': JSON.stringify({
+          showToast: {
+            message: `Path overlaps existing mapping: ${overlap.source_path}`,
+            type: 'error',
+          },
+        }),
+      });
+    }
+
     // Add to config
     const newDir = { source_path: sourcePath, remote_root: remoteRoot };
     const newConfig: Config = {
       ...defaultConfig,
       ...currentConfig,
-      sync_dirs: [...(currentConfig?.sync_dirs || []), newDir],
+      sync_dirs: [...existingDirs, newDir],
     };
 
     // Write to config file
@@ -1103,6 +1217,170 @@ app.post('/api/add-directory', async (c) => {
         showToast: { message: `Error: ${(err as Error).message}`, type: 'error' },
       }),
     });
+  }
+});
+
+app.use('/api/web-auth/*', async (c, next) => {
+  c.header('Cache-Control', 'no-store, max-age=0');
+  c.header('Pragma', 'no-cache');
+  c.header('Referrer-Policy', 'no-referrer');
+  c.header('X-Content-Type-Options', 'nosniff');
+  c.header('X-Frame-Options', 'DENY');
+  c.header('Vary', 'Origin, Sec-Fetch-Site');
+
+  if (c.req.method === 'POST') {
+    const configurationError = webAuthConfigurationError(webAuthSettings);
+    if (configurationError) return c.json({ error: configurationError }, 503);
+
+    const info = getWebAuthRequestInfo(c.req.raw);
+    if (!isTransportAllowed(info, webAuthSettings)) {
+      return c.json({ error: 'Web login requires localhost or HTTPS.' }, 403);
+    }
+    if (!isSameOriginWebAuthRequest(info, webAuthSettings)) {
+      return c.json({ error: 'Request origin could not be verified.' }, 403);
+    }
+    if (!c.req.header('content-type')?.toLowerCase().startsWith('application/json')) {
+      return c.json({ error: 'Only JSON requests are accepted.' }, 415);
+    }
+    const contentLength = Number(c.req.header('content-length') || 0);
+    if (contentLength > 16_384) return c.json({ error: 'Request is too large.' }, 413);
+  }
+
+  await next();
+});
+
+app.get('/api/web-auth/capabilities', (c) => {
+  const configurationError = webAuthConfigurationError(webAuthSettings);
+  const transportAllowed = isTransportAllowed(getWebAuthRequestInfo(c.req.raw), webAuthSettings);
+  return c.json({
+    enabled: !configurationError,
+    available: !configurationError && transportAllowed,
+    transportSecure: transportAllowed,
+    reason: configurationError || (transportAllowed ? null : 'Open this dashboard via HTTPS.'),
+  });
+});
+
+app.post('/api/web-auth/login', async (c) => {
+  const info = getWebAuthRequestInfo(c.req.raw);
+  const limiterKey = info.clientAddress;
+  if (!webAuthRateLimiter.isAllowed(limiterKey)) {
+    const retryAfter = webAuthRateLimiter.retryAfterSeconds(limiterKey);
+    c.header('Retry-After', String(retryAfter));
+    return c.json({ error: `Too many attempts. Try again in ${retryAfter} seconds.` }, 429);
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    const parsed: unknown = await c.req.json();
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
+    body = parsed as Record<string, unknown>;
+  } catch {
+    webAuthRateLimiter.recordFailure(limiterKey);
+    return c.json({ error: 'Invalid request.' }, 400);
+  }
+
+  const accessToken = typeof body.accessToken === 'string' ? body.accessToken : '';
+  const username = typeof body.username === 'string' ? body.username.trim() : '';
+  const password = typeof body.password === 'string' ? body.password : '';
+  if (
+    !webAuthSettings.accessToken ||
+    !accessTokenMatches(webAuthSettings.accessToken, accessToken) ||
+    username.length < 1 ||
+    username.length > 320 ||
+    password.length < 1 ||
+    password.length > 1024
+  ) {
+    webAuthRateLimiter.recordFailure(limiterKey);
+    return c.json({ error: webAuthErrorMessage() }, 401);
+  }
+
+  const auth = new ProtonAuth();
+  try {
+    await initCrypto();
+    await auth.login(username, password);
+    await completeWebAuthentication(null, {
+      auth,
+      username,
+      step: 'two_factor',
+      clientAddress: limiterKey,
+      expiresAt: 0,
+    });
+    webAuthRateLimiter.clear(limiterKey);
+    return c.json({ step: 'complete' });
+  } catch (error) {
+    const authError = error as ApiError;
+    if (authError.requires2FA || authError.requiresMailboxPassword) {
+      const step: WebAuthStep = authError.requires2FA ? 'two_factor' : 'mailbox_password';
+      const challengeId = createWebAuthChallenge(auth, username, step, limiterKey);
+      return c.json({ step, challengeId });
+    }
+    webAuthRateLimiter.recordFailure(limiterKey);
+    return c.json({ error: webAuthErrorMessage() }, 401);
+  }
+});
+
+app.post('/api/web-auth/challenge', async (c) => {
+  const info = getWebAuthRequestInfo(c.req.raw);
+  const limiterKey = info.clientAddress;
+  if (!webAuthRateLimiter.isAllowed(limiterKey)) {
+    const retryAfter = webAuthRateLimiter.retryAfterSeconds(limiterKey);
+    c.header('Retry-After', String(retryAfter));
+    return c.json({ error: `Too many attempts. Try again in ${retryAfter} seconds.` }, 429);
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    const parsed: unknown = await c.req.json();
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
+    body = parsed as Record<string, unknown>;
+  } catch {
+    webAuthRateLimiter.recordFailure(limiterKey);
+    return c.json({ error: 'Invalid request.' }, 400);
+  }
+
+  const accessToken = typeof body.accessToken === 'string' ? body.accessToken : '';
+  const challengeId = typeof body.challengeId === 'string' ? body.challengeId : '';
+  if (
+    !webAuthSettings.accessToken ||
+    !accessTokenMatches(webAuthSettings.accessToken, accessToken)
+  ) {
+    webAuthRateLimiter.recordFailure(limiterKey);
+    return c.json({ error: webAuthErrorMessage() }, 401);
+  }
+
+  removeExpiredWebAuthChallenges();
+  const challenge = pendingWebAuth.get(challengeId);
+  if (!challenge || challenge.clientAddress !== limiterKey) {
+    webAuthRateLimiter.recordFailure(limiterKey);
+    return c.json({ error: 'The login session expired. Start again.' }, 410);
+  }
+
+  try {
+    if (challenge.step === 'two_factor') {
+      const code = typeof body.code === 'string' ? body.code.trim() : '';
+      if (code.length < 4 || code.length > 16) throw new Error('Invalid code');
+      try {
+        await challenge.auth.submit2FA(code);
+      } catch (error) {
+        if (!(error as ApiError).requiresMailboxPassword) throw error;
+        challenge.step = 'mailbox_password';
+        challenge.expiresAt = Date.now() + WEB_AUTH_CHALLENGE_TTL_MS;
+        return c.json({ step: 'mailbox_password', challengeId });
+      }
+    } else {
+      const mailboxPassword = typeof body.mailboxPassword === 'string' ? body.mailboxPassword : '';
+      if (mailboxPassword.length < 1 || mailboxPassword.length > 1024) {
+        throw new Error('Invalid mailbox password');
+      }
+      await challenge.auth.submitMailboxPassword(mailboxPassword);
+    }
+
+    await completeWebAuthentication(challengeId, challenge);
+    webAuthRateLimiter.clear(limiterKey);
+    return c.json({ step: 'complete' });
+  } catch {
+    webAuthRateLimiter.recordFailure(limiterKey);
+    return c.json({ error: webAuthErrorMessage(), step: challenge.step, challengeId }, 401);
   }
 });
 
@@ -1369,7 +1647,12 @@ async function runDashboardServer(): Promise<void> {
     }
 
     const server = Bun.serve({
-      fetch: app.fetch,
+      fetch(request, bunServer) {
+        requestConnections.set(request, {
+          clientAddress: bunServer.requestIP(request)?.address || 'unknown',
+        });
+        return app.fetch(request);
+      },
       port,
       hostname: host,
       idleTimeout: 0, // Disable timeout - SSE connections stay open indefinitely

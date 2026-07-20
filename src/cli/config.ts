@@ -16,6 +16,7 @@ import type { Config, ExcludePattern, SyncDir, RemoteDeleteBehavior } from '../c
 import { sendSignal } from '../signals.js';
 import { chownToEffectiveUser } from '../paths.js';
 import { validateGlob, clearRegexCache } from '../sync/exclusions.js';
+import { findOverlappingSyncDir, normalizeLocalRoot, normalizeRemoteRoot } from '../sync/paths.js';
 
 // ============================================================================
 // Base Config Command
@@ -410,24 +411,26 @@ function listSyncDirs(): void {
 }
 
 function addSyncDir(sourcePath: string, remoteRoot: string): void {
+  sourcePath = normalizeLocalRoot(sourcePath);
+
   // Validate source path exists
   if (!existsSync(sourcePath)) {
     console.error(`Directory does not exist: ${sourcePath}`);
     process.exit(1);
   }
 
-  // Ensure remote root starts with /
-  if (!remoteRoot.startsWith('/')) {
-    remoteRoot = '/' + remoteRoot;
-  }
-
-  // Remove trailing slash from source path to ensure consistent path matching
-  if (sourcePath.endsWith('/') && sourcePath.length > 1) {
-    sourcePath = sourcePath.slice(0, -1);
-  }
+  remoteRoot = normalizeRemoteRoot(remoteRoot);
 
   const config = loadConfigRaw();
   const syncDirs = (config.sync_dirs as SyncDir[]) ?? [];
+
+  const overlap = findOverlappingSyncDir(sourcePath, syncDirs);
+  if (overlap) {
+    console.error(
+      `Sync directory overlaps an existing mapping: ${sourcePath} overlaps ${overlap.source_path}`
+    );
+    process.exit(1);
+  }
 
   // Check for duplicates
   if (syncDirs.some((d) => d.source_path === sourcePath)) {
@@ -442,6 +445,7 @@ function addSyncDir(sourcePath: string, remoteRoot: string): void {
 }
 
 function removeSyncDir(sourcePath: string): void {
+  sourcePath = normalizeLocalRoot(sourcePath);
   const config = loadConfigRaw();
   const syncDirs = (config.sync_dirs as SyncDir[]) ?? [];
 

@@ -1,285 +1,276 @@
-<p align="center">
-  <img src="readme_assets/banner.png" alt="Proton Drive Sync" />
-</p>
+# Proton NAS Sync
 
-<p align="center">
-  <video src="https://github.com/user-attachments/assets/bf1fccac-9a08-4da1-bc0c-2c06d510fbf1"/>
-</p>
+An unofficial, NAS-focused Proton Drive uploader with a Docker-first dashboard.
 
-<a href="https://www.buymeacoffee.com/thebitflipper" target="_blank">
-  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="50">
-</a>
+This fork keeps local directories backed up to Proton Drive while staying responsive around large
+project trees. It is designed for headless systems such as Ugreen NAS, Synology, QNAP, Unraid, and
+ordinary Linux servers.
 
-## Installation
+If this NAS-focused fork is useful to you, you can support its development on
+[Ko-fi](https://ko-fi.com/robje007).
 
-### macOS
+> [!IMPORTANT]
+> This is **one-way synchronization**: local changes are uploaded to Proton Drive. Changes made in
+> Proton Drive are not downloaded to the NAS. This project is not affiliated with or endorsed by
+> Proton AG.
 
-```bash
-brew tap DamianB-BitFlipper/tap
-brew update
-brew install proton-drive-sync
+## Why this fork exists
 
-proton-drive-sync setup
-```
+The upstream project provides the Proton Drive integration. This fork focuses on the failure modes
+seen on a real NAS installation:
 
-### Linux
+- restart-safe process locks that detect Docker PID reuse;
+- an explicit `unlock` command that only removes verified stale locks;
+- lazy, batched scans instead of loading an entire project tree into memory;
+- early pruning of `node_modules`, package caches, virtual environments, and other defaults;
+- queued jobs are revalidated immediately before upload;
+- changing a remote root removes jobs made with the old mapping;
+- excluded files already in the queue are discarded safely;
+- canonical remote paths, so `/` plus `Projects` never becomes `//Projects`;
+- idempotent remote folder creation during concurrent uploads;
+- Docker stays online while waiting for authentication—no restart after `auth`;
+- optional browser login with 2FA, transport checks, CSRF protection, and throttling;
+- state resets no longer restart an already configured onboarding wizard;
+- a compact NAS dashboard with clear one-way backup semantics.
 
-#### Debian / Ubuntu
+## Quick start with Docker Compose
 
-```bash
-# Add repository
-echo "deb [trusted=yes] https://repo.damianb.dev/apt/ * *" | sudo tee /etc/apt/sources.list.d/proton-drive-sync.list
-sudo apt update
-
-# Install
-sudo apt install proton-drive-sync
-
-proton-drive-sync setup
-```
-
-#### Fedora / RHEL / CentOS
+Generate a credential-encryption key:
 
 ```bash
-# Add repository
-sudo tee /etc/yum.repos.d/proton-drive-sync.repo << 'EOF'
-[proton-drive-sync]
-name=Proton Drive Sync
-baseurl=https://repo.damianb.dev/yum/
-enabled=1
-gpgcheck=0
-EOF
-
-# Install
-sudo dnf install proton-drive-sync
-
-proton-drive-sync setup
+openssl rand -base64 32
 ```
 
-<details>
-<summary>Homebrew (Linux)</summary>
+Create `.env`:
+
+```dotenv
+KEYRING_PASSWORD=replace-with-the-generated-value
+TZ=Europe/Amsterdam
+DASHBOARD_PORT=4242
+```
+
+Use this Compose file:
+
+```yaml
+name: proton-nas-sync
+
+services:
+  proton-drive-sync:
+    image: ghcr.io/robje007/proton-drive-sync:latest
+    container_name: proton-drive-sync
+    restart: unless-stopped
+
+    environment:
+      KEYRING_PASSWORD: ${KEYRING_PASSWORD}
+      TZ: ${TZ:-UTC}
+      DOCKER: '1'
+      # WEB_AUTH_ENABLED: '1'
+      # WEB_AUTH_ACCESS_TOKEN: ${WEB_AUTH_ACCESS_TOKEN}
+      # WEB_AUTH_TRUST_PROXY: '1' # only behind an HTTPS reverse proxy
+
+    ports:
+      - '${DASHBOARD_PORT:-4242}:4242'
+
+    volumes:
+      - proton-drive-config:/config/proton-drive-sync
+      - proton-drive-state:/state/proton-drive-sync
+      - /home/robin:/data/robin
+
+    stop_grace_period: 30s
+
+volumes:
+  proton-drive-config:
+  proton-drive-state:
+```
+
+Until a prebuilt package has been published, replace `image:` with:
+
+```yaml
+build:
+  context: .
+  dockerfile: docker/Dockerfile
+```
+
+Start it:
 
 ```bash
-brew tap DamianB-BitFlipper/tap
-brew update
-brew install proton-drive-sync
-
-proton-drive-sync setup
+sudo docker compose up -d --build
 ```
 
-</details>
-
-<details>
-<summary>Arch Linux (AUR)</summary>
-
-Install from the [AUR package](https://aur.archlinux.org/packages/proton-drive-sync-bin):
+The dashboard remains available while credentials are missing. Authenticate once:
 
 ```bash
-# Install via yay
-yay -S proton-drive-sync-bin
-
-# Install via paru
-paru -S proton-drive-sync-bin
+sudo docker exec -it proton-drive-sync proton-drive-sync auth
 ```
 
-</details>
+The running service detects the new credentials within five seconds. A container restart is not
+required.
 
-<details>
-<summary>AppImage</summary>
+Open `http://NAS-IP:4242` and create a mapping, for example:
 
-Download the AppImage from [GitHub Releases](https://github.com/DamianB-BitFlipper/proton-drive-sync/releases/latest):
+```text
+/data/robin/Projects → /backupnas
+```
+
+## Secure sign-in through the dashboard
+
+Browser sign-in is disabled by default. It supports Proton 2FA and two-password accounts without
+storing the login password or verification code. An unfinished authentication flow exists only in
+memory and expires after five minutes.
+
+Generate a separate dashboard login token:
 
 ```bash
-# Download (replace VERSION and ARCH as needed)
-wget https://github.com/DamianB-BitFlipper/proton-drive-sync/releases/latest/download/Proton_Drive_Sync-VERSION-x86_64.AppImage
-
-# Make executable and run
-chmod +x Proton_Drive_Sync-*.AppImage
-./Proton_Drive_Sync-*.AppImage setup
-
-# Optionally move to PATH
-sudo mv Proton_Drive_Sync-*.AppImage /usr/local/bin/proton-drive-sync
+openssl rand -base64 48
 ```
 
-</details>
+Add it to `.env` and never reuse `KEYRING_PASSWORD`:
 
-<details>
-<summary>Flatpak</summary>
+```dotenv
+WEB_AUTH_ACCESS_TOKEN=replace-with-the-generated-value
+```
 
-Download the Flatpak bundle from [GitHub Releases](https://github.com/DamianB-BitFlipper/proton-drive-sync/releases/latest):
+Then add these variables to the container:
+
+```yaml
+environment:
+  WEB_AUTH_ENABLED: '1'
+  WEB_AUTH_ACCESS_TOKEN: ${WEB_AUTH_ACCESS_TOKEN}
+```
+
+With plain HTTP, the sign-in form works only at `http://localhost:4242`. For a NAS dashboard opened
+from another device, first configure an HTTPS reverse proxy. Then add:
+
+```yaml
+environment:
+  WEB_AUTH_TRUST_PROXY: '1'
+```
+
+The proxy must set `X-Forwarded-Proto: https`. Do not leave the direct dashboard port reachable from
+the LAN when trusting proxy headers. If the reverse proxy runs on the NAS host, bind the port only
+to loopback:
+
+```yaml
+ports:
+  - '127.0.0.1:4242:4242'
+```
+
+Also protect the complete dashboard with the reverse proxy's authentication, a VPN, or a strict
+firewall rule. `WEB_AUTH_ACCESS_TOKEN` protects the Proton sign-in endpoints; it does not turn the
+rest of the dashboard into a multi-user application. After a successful sign-in, the running sync
+process detects the new encrypted session automatically—no container restart is needed.
+
+## Recommended project exclusions
+
+New installations automatically exclude generated dependency/cache directories:
+
+```text
+node_modules
+.npm
+.pnpm-store
+.yarn/cache
+__pycache__
+.venv
+venv
+```
+
+Source code, dotfiles, build files, and `.git` remain included. Add more exclusions when needed:
 
 ```bash
-# Download (replace VERSION and ARCH as needed)
-wget https://github.com/DamianB-BitFlipper/proton-drive-sync/releases/latest/download/Proton_Drive_Sync-VERSION-x86_64.flatpak
-
-# Install
-flatpak install --user Proton_Drive_Sync-*.flatpak
-
-# Run
-flatpak run io.github.damianbbitflipper.ProtonDriveSync setup
+sudo docker exec proton-drive-sync proton-drive-sync config exclude \
+  --path / \
+  --add '.next' 'dist' 'coverage'
 ```
 
-</details>
-
-<details>
-<summary>Nix</summary>
+List the effective configuration:
 
 ```bash
-# Run directly
-nix run github:DamianB-BitFlipper/proton-drive-sync
-
-# Install to profile
-nix profile install github:DamianB-BitFlipper/proton-drive-sync
-
-# Or add to your flake inputs
-# inputs.proton-drive-sync.url = "github:DamianB-BitFlipper/proton-drive-sync";
+sudo docker exec proton-drive-sync proton-drive-sync config sync-dir --list
+sudo docker exec proton-drive-sync proton-drive-sync config exclude --list
 ```
 
-</details>
+## Safe recovery commands
 
-<details>
-<summary>Tarball (manual)</summary>
-
-Download the Linux tarball from [GitHub Releases](https://github.com/DamianB-BitFlipper/proton-drive-sync/releases/latest):
+Check state:
 
 ```bash
-tar -xzf proton-drive-sync-linux-x64.tar.gz
-sudo mv proton-drive-sync /usr/local/bin/
-proton-drive-sync setup
+sudo docker exec proton-drive-sync proton-drive-sync status
 ```
 
-</details>
-
-### Docker
-
-See **[DOCKER_SETUP.md](DOCKER_SETUP.md)** for running with Docker Compose on Linux x86_64 and ARM64.
+Clear a stale lock safely:
 
 ```bash
-cd docker/
-cp .env.example .env
-# Edit .env with KEYRING_PASSWORD and sync directory paths
-docker compose up -d
-docker exec -it proton-drive-sync proton-drive-sync auth
+sudo docker exec proton-drive-sync proton-drive-sync unlock
 ```
 
-### Coming Soon
+The command refuses to unlock a verified running process. There is no need to edit SQLite or remove
+the complete state volume.
 
-<details>
-<summary>Windows</summary>
-
-Download the `.zip` from [GitHub Releases](https://github.com/DamianB-BitFlipper/proton-drive-sync/releases/latest), extract, and add to your PATH.
-
-</details>
-
-### Installing Pre-release Versions
-
-<details>
-<summary>Pre-release packages</summary>
-
-Pre-release packages (`proton-drive-sync-prerelease`) allow you to test upcoming features before stable release. They conflict with the stable package, so only one can be installed at a time.
-
-#### macOS
+Pause and resume:
 
 ```bash
-brew tap DamianB-BitFlipper/tap
-brew install proton-drive-sync-prerelease
+sudo docker exec proton-drive-sync proton-drive-sync pause
+sudo docker exec proton-drive-sync proton-drive-sync resume
 ```
 
-#### Debian / Ubuntu
+View logs:
 
 ```bash
-# Add repository (if not already added)
-echo "deb [trusted=yes] https://repo.damianb.dev/apt/ * *" | sudo tee /etc/apt/sources.list.d/proton-drive-sync.list
-sudo apt update
-
-# Install prerelease
-sudo apt install proton-drive-sync-prerelease
+sudo docker logs --tail 100 -f proton-drive-sync
 ```
 
-#### Fedora / RHEL / CentOS
+## Ugreen and restricted NAS kernels
+
+This Compose setup intentionally contains no container-level `fs.inotify.*` sysctls. Several NAS
+kernels reject them with:
+
+```text
+sysctl "fs.inotify.max_user_instances" is not in a separate kernel namespace
+```
+
+If limits need adjustment, configure them on the NAS host through the vendor-supported mechanism;
+do not add them to the container unless the NAS kernel explicitly supports namespaced sysctls.
+
+## Migrating from another image
+
+Credentials and configuration live in `/config/proton-drive-sync`. Sync history and process state
+live separately in `/state/proton-drive-sync`.
+
+To keep an existing login, mount the old config volume into the new container. A fresh state volume
+is recommended when migrating from a wrapper image that left stale jobs or PID locks. The first scan
+will rebuild state in bounded batches and recognize existing remote files and folders.
+
+Never publish `KEYRING_PASSWORD`, `.env`, `credentials.enc`, or a config-volume backup.
+
+## Local development
+
+Requirements: Bun and Docker/Podman.
 
 ```bash
-# Add repository (if not already added)
-sudo tee /etc/yum.repos.d/proton-drive-sync.repo << 'EOF'
-[proton-drive-sync]
-name=Proton Drive Sync
-baseurl=https://repo.damianb.dev/yum/
-enabled=1
-gpgcheck=0
-EOF
-
-# Install prerelease
-sudo dnf install proton-drive-sync-prerelease
+bun install
+bun run build:check
+bun test
+bun run build:css
+bun run build:bin
 ```
 
-#### Arch Linux (AUR)
-
-On Arch Linux and derivatives, install from the [AUR package](https://aur.archlinux.org/packages/proton-drive-sync-prerelease-bin):
+Build the container:
 
 ```bash
-# Install via yay
-yay -S proton-drive-sync-prerelease-bin
-
-# Install via paru
-paru -S proton-drive-sync-prerelease-bin
+sudo docker build -f docker/Dockerfile -t proton-nas-sync:dev .
 ```
 
-#### Manual Installation
+## Support
 
-Download the pre-release tarball for your platform from [GitHub Releases](https://github.com/DamianB-BitFlipper/proton-drive-sync/releases) and extract it:
+Proton NAS Sync is maintained as an independent community project. You can support continued NAS
+testing and development at [ko-fi.com/robje007](https://ko-fi.com/robje007).
 
-```bash
-# Example for macOS arm64
-tar -xzf proton-drive-sync-darwin-arm64.tar.gz
-sudo mv proton-drive-sync /usr/local/bin/
-```
+## Upstream and license
 
-#### Switching Between Stable and Pre-release
+Proton NAS Sync is a modified version of
+[DamianB-BitFlipper/proton-drive-sync](https://github.com/DamianB-BitFlipper/proton-drive-sync).
+The original work and this fork are distributed under the GNU General Public License v3.0. Modified
+versions must remain under GPL-3.0 when distributed, include the license, provide corresponding
+source, and be clearly identified as modified.
 
-The packages conflict with each other, so installing one will automatically remove the other:
-
-```bash
-# Switch to prerelease
-sudo apt install proton-drive-sync-prerelease
-
-# Switch back to stable
-sudo apt install proton-drive-sync
-```
-
-</details>
-
-## Usage
-
-### Dashboard
-
-The dashboard runs locally at http://localhost:4242. Use it to configure and manage the sync client.
-
-### Commands
-
-| Command                    | Description                                          |
-| -------------------------- | ---------------------------------------------------- |
-| `proton-drive-sync setup`  | Interactive setup wizard (recommended for first run) |
-| `proton-drive-sync auth`   | Authenticate with Proton                             |
-| `proton-drive-sync start`  | Start the sync daemon                                |
-| `proton-drive-sync stop`   | Stop the sync daemon                                 |
-| `proton-drive-sync status` | Show sync status                                     |
-| `proton-drive-sync --help` | Show all available commands                          |
-
-### Uninstall
-
-To completely remove proton-drive-sync and all its data:
-
-```bash
-proton-drive-sync reset --purge
-```
-
-This will stop the service, remove credentials, and delete all configuration and sync history.
-
-For package managers:
-
-- **Homebrew**: `brew uninstall proton-drive-sync`
-- **Debian/Ubuntu**: `sudo apt remove proton-drive-sync`
-- **Fedora/RHEL**: `sudo dnf remove proton-drive-sync`
-
-## Development
-
-See [DEVELOPMENT.md](DEVELOPMENT.md) for development setup and contributing guidelines.
+See [LICENSE](LICENSE) for the complete license text.

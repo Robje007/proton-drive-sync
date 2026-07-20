@@ -30,6 +30,35 @@ export type { CreateProtonDriveClient, CreateResult } from './types.js';
 // ============================================================================
 
 /**
+ * Create a folder idempotently. Concurrent jobs may race while creating the
+ * same parent; in that case, resolve the folder created by the winning job.
+ */
+async function createFolderOrFindExisting(
+  client: CreateProtonDriveClient,
+  parentFolderUid: string,
+  folderName: string,
+  modificationTime?: Date
+): Promise<string> {
+  const existingFolderUid = await findFolderByName(client, parentFolderUid, folderName);
+  if (existingFolderUid) return existingFolderUid;
+
+  const result = await client.createFolder(parentFolderUid, folderName, modificationTime);
+  if (result.ok && result.value) return result.value.uid;
+
+  // Another concurrent job may have created the same folder after our lookup.
+  for (const delayMs of [100, 300, 750]) {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    const racedFolderUid = await findFolderByName(client, parentFolderUid, folderName);
+    if (racedFolderUid) {
+      logger.debug(`Folder already existed after concurrent create: ${folderName}`);
+      return racedFolderUid;
+    }
+  }
+
+  throw new Error(`Failed to create directory "${folderName}": ${result.error}`);
+}
+
+/**
  * Ensure all directories in the path exist, creating them if necessary.
  * Returns the UID of the final (deepest) folder.
  *
@@ -47,11 +76,7 @@ async function ensureRemotePath(
   for (const folderName of pathParts) {
     if (needToCreate) {
       // Once we start creating, all subsequent folders need to be created
-      const result = await client.createFolder(currentFolderUid, folderName);
-      if (!result.ok || !result.value) {
-        throw new Error(`Failed to create folder "${folderName}": ${result.error}`);
-      }
-      currentFolderUid = result.value.uid;
+      currentFolderUid = await createFolderOrFindExisting(client, currentFolderUid, folderName);
     } else {
       // Search for existing folder
       const existingFolderUid = await findFolderByName(client, currentFolderUid, folderName);
@@ -60,11 +85,7 @@ async function ensureRemotePath(
         currentFolderUid = existingFolderUid;
       } else {
         // Folder doesn't exist, create it and all subsequent folders
-        const result = await client.createFolder(currentFolderUid, folderName);
-        if (!result.ok || !result.value) {
-          throw new Error(`Failed to create folder "${folderName}": ${result.error}`);
-        }
-        currentFolderUid = result.value.uid;
+        currentFolderUid = await createFolderOrFindExisting(client, currentFolderUid, folderName);
         needToCreate = true; // All subsequent folders must be created
       }
     }
@@ -222,18 +243,7 @@ async function createDirectory(
   dirName: string,
   modificationTime?: Date
 ): Promise<string> {
-  // Check if directory already exists
-  const existingFolderUid = await findFolderByName(client, targetFolderUid, dirName);
-
-  if (existingFolderUid) {
-    return existingFolderUid;
-  } else {
-    const result = await client.createFolder(targetFolderUid, dirName, modificationTime);
-    if (!result.ok || !result.value) {
-      throw new Error(`Failed to create directory "${dirName}": ${result.error}`);
-    }
-    return result.value.uid;
-  }
+  return createFolderOrFindExisting(client, targetFolderUid, dirName, modificationTime);
 }
 
 // ============================================================================

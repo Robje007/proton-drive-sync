@@ -31,6 +31,7 @@ import {
 } from './service/index.js';
 import { startDashboardMode } from '../dashboard/app.js';
 import { runOneShotSync, runWatchMode, closeWatcher } from '../sync/index.js';
+import { isDocker } from '../environment.js';
 
 // ============================================================================
 // Types
@@ -101,6 +102,31 @@ async function authenticateWithStatus(sdkDebug = false): Promise<ProtonDriveClie
         `Authentication failed (attempt ${attempt + 1}/${delays.length}), retrying in ${delaySec}s: ${err.message}`
       );
       await new Promise((resolve) => setTimeout(resolve, delaySec * 1000));
+    }
+  }
+}
+
+/** Keep a Docker dashboard alive while waiting for `proton-drive-sync auth`. */
+async function authenticateForRuntime(sdkDebug = false): Promise<ProtonDriveClient> {
+  let waitingLogged = false;
+
+  while (true) {
+    try {
+      return await authenticateWithStatus(sdkDebug);
+    } catch (error) {
+      if (!isDocker()) throw error;
+
+      const message = error instanceof Error ? error.message : String(error);
+      if (!waitingLogged) {
+        logger.warn(`Authentication unavailable: ${message}`);
+        logger.info(
+          'Container is staying online. Run `proton-drive-sync auth`; syncing will start without a restart.'
+        );
+        waitingLogged = true;
+      } else {
+        logger.debug(`Still waiting for authentication: ${message}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
     }
   }
 }
@@ -248,11 +274,15 @@ export async function startCommand(options: StartOptions): Promise<void> {
   watchConfig();
 
   // Set up cleanup handler
-  const cleanup = async (): Promise<void> => {
-    closeWatcher();
-    await stopDashboard();
-    stopSignalListener();
-    releaseRunLock();
+  let cleanupPromise: Promise<void> | null = null;
+  const cleanup = (): Promise<void> => {
+    cleanupPromise ??= (async () => {
+      await closeWatcher();
+      await stopDashboard();
+      stopSignalListener();
+      releaseRunLock();
+    })();
+    return cleanupPromise;
   };
 
   // Global crash handlers - log errors and cleanup before exit
@@ -329,9 +359,11 @@ export async function startCommand(options: StartOptions): Promise<void> {
   const sdkDebug = options.sdkDebug;
   let client;
   try {
-    client = await authenticateWithStatus(sdkDebug);
+    client = await authenticateForRuntime(sdkDebug);
   } catch (error) {
-    logger.error(`Authentication failed: ${error}`);
+    logger.error(
+      `Authentication failed: ${error instanceof Error ? error.message : String(error)}`
+    );
     await cleanup();
     process.exit(1);
   }

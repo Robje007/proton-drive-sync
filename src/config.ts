@@ -12,6 +12,12 @@ import { logger } from './logger.js';
 import { isDocker } from './environment.js';
 import { getConfigDir, ensureDir, chownToEffectiveUser } from './paths.js';
 import { registerSignalHandler, sendSignal } from './signals.js';
+import {
+  findOverlappingSyncDir,
+  isLocalPathConfigured,
+  normalizeLocalRoot,
+  normalizeRemoteRoot,
+} from './sync/paths.js';
 
 // ============================================================================
 // Types
@@ -60,6 +66,17 @@ export const CONFIG_CHECK_SIGNAL = 'config:check';
 /** Default sync concurrency */
 export const DEFAULT_SYNC_CONCURRENCY = 4;
 
+/** Generated dependency/cache directories that are unsafe to scan by default. */
+export const DEFAULT_EXCLUDE_GLOBS = [
+  'node_modules',
+  '.npm',
+  '.pnpm-store',
+  '.yarn/cache',
+  '__pycache__',
+  '.venv',
+  'venv',
+] as const;
+
 /** Default remote delete behavior - move to trash for safety */
 export const DEFAULT_REMOTE_DELETE_BEHAVIOR: RemoteDeleteBehavior = 'trash';
 
@@ -76,7 +93,7 @@ export const defaultConfig: Config = {
   remote_delete_behavior: DEFAULT_REMOTE_DELETE_BEHAVIOR,
   dashboard_host: DEFAULT_DASHBOARD_HOST,
   dashboard_port: DEFAULT_DASHBOARD_PORT,
-  exclude_patterns: [],
+  exclude_patterns: [{ path: '/', globs: [...DEFAULT_EXCLUDE_GLOBS] }],
 };
 
 const CONFIG_DIR = getConfigDir();
@@ -142,12 +159,13 @@ function parseConfig(throwOnError: boolean): Config | null {
       config.dashboard_port = DEFAULT_DASHBOARD_PORT;
     }
 
-    // Default exclude_patterns if not set
+    // Default exclude_patterns if not set. Existing explicit configurations are preserved.
     if (config.exclude_patterns === undefined) {
-      config.exclude_patterns = [];
+      config.exclude_patterns = [{ path: '/', globs: [...DEFAULT_EXCLUDE_GLOBS] }];
     }
 
     // Validate all sync_dirs entries
+    const normalizedSyncDirs: SyncDir[] = [];
     for (const dir of config.sync_dirs) {
       if (typeof dir === 'string') {
         const msg =
@@ -168,12 +186,8 @@ function parseConfig(throwOnError: boolean): Config | null {
         return null;
       }
 
-      // Ensure remote_root starts with '/'
-      if (!dir.remote_root) {
-        dir.remote_root = '/';
-      } else if (!dir.remote_root.startsWith('/')) {
-        dir.remote_root = '/' + dir.remote_root;
-      }
+      dir.source_path = normalizeLocalRoot(dir.source_path);
+      dir.remote_root = normalizeRemoteRoot(dir.remote_root || '/');
 
       if (!existsSync(dir.source_path)) {
         const msg = `Sync directory does not exist: ${dir.source_path}`;
@@ -183,7 +197,21 @@ function parseConfig(throwOnError: boolean): Config | null {
         logger.error(msg);
         return null;
       }
+
+      const overlap = findOverlappingSyncDir(dir.source_path, normalizedSyncDirs);
+      if (overlap) {
+        const msg =
+          `Overlapping sync directories are not allowed: ${dir.source_path} overlaps ` +
+          overlap.source_path;
+        if (throwOnError) throw new Error(msg);
+        logger.error(msg);
+        return null;
+      }
+
+      normalizedSyncDirs.push(dir);
     }
+
+    config.sync_dirs = normalizedSyncDirs;
 
     return config;
   } catch (error) {
@@ -223,7 +251,7 @@ export function getConfig(): Config {
  * Check if a path is within any of the configured sync directories.
  */
 export function isPathWatched(localPath: string): boolean {
-  return getConfig().sync_dirs.some((dir) => localPath.startsWith(dir.source_path));
+  return isLocalPathConfigured(localPath, getConfig());
 }
 
 /** Check if two values are deeply equal (for sync_dirs array comparison) */

@@ -8,6 +8,7 @@
 
 import chokidar, { type FSWatcher as ChokidarWatcher } from 'chokidar';
 import { statSync, existsSync, type Stats } from 'fs';
+import { opendir } from 'fs/promises';
 import { join, relative } from 'path';
 import { eq, like } from 'drizzle-orm';
 import { logger } from '../logger.js';
@@ -15,7 +16,7 @@ import { type Config, type ExcludePattern, getConfig } from '../config.js';
 import { db } from '../db/index.js';
 import { fileState } from '../db/schema.js';
 import { isPathExcluded } from './exclusions.js';
-import { WATCHER_DEBOUNCE_MS } from './constants.js';
+import { SCAN_BATCH_SIZE, WATCHER_DEBOUNCE_MS } from './constants.js';
 
 // ============================================================================
 // Types
@@ -83,6 +84,34 @@ export function getAllStoredChangeTokens(syncDirPath: string): Map<string, strin
 // File System Scanning
 // ============================================================================
 
+/** Walk a tree lazily and prune excluded directories before entering them. */
+async function* walkDirectory(
+  watchDir: string,
+  excludePatterns: ExcludePattern[],
+  currentDir = watchDir
+): AsyncGenerator<string> {
+  let directory;
+  try {
+    directory = await opendir(currentDir);
+  } catch (error) {
+    logger.debug(
+      `Unable to read directory ${currentDir}: ${error instanceof Error ? error.message : String(error)}`
+    );
+    return;
+  }
+
+  for await (const entry of directory) {
+    const fullPath = join(currentDir, entry.name);
+    if (isPathExcluded(fullPath, watchDir, excludePatterns)) continue;
+    yield fullPath;
+
+    // Do not follow directory symlinks; they can escape the configured root or form loops.
+    if (entry.isDirectory() && !entry.isSymbolicLink()) {
+      yield* walkDirectory(watchDir, excludePatterns, fullPath);
+    }
+  }
+}
+
 /**
  * Scan a directory recursively and return all files/directories with their stats.
  * Filters out paths matching exclusion patterns.
@@ -99,22 +128,10 @@ export async function scanDirectory(
   >();
 
   try {
-    // Use Bun.Glob to scan all files and directories
-    const glob = new Bun.Glob('**/*');
-    const entries = glob.scanSync({ cwd: watchDir, dot: true, onlyFiles: false });
-
-    for (const entry of entries) {
+    for await (const fullPath of walkDirectory(watchDir, excludePatterns)) {
       // Throttle if specified (for background reconciliation)
       if (throttleMs && throttleMs > 0) {
         await new Promise((resolve) => setTimeout(resolve, throttleMs));
-      }
-
-      const fullPath = join(watchDir, entry);
-
-      // Skip excluded paths
-      if (isPathExcluded(fullPath, watchDir, excludePatterns)) {
-        logger.debug(`[scan] Skipping excluded path: ${entry}`);
-        continue;
       }
 
       try {
@@ -201,6 +218,81 @@ export function compareWithStoredChangeTokens(
   return changes;
 }
 
+/**
+ * Stream a directory scan into bounded batches. This avoids retaining the full
+ * filesystem and full change list in memory during first-run scans.
+ */
+async function queryDirectoryChanges(
+  watchDir: string,
+  excludePatterns: ExcludePattern[],
+  storedTokens: Map<string, string>,
+  onFileChangeBatch: FileChangeBatchHandler
+): Promise<number> {
+  const changes: FileChange[] = [];
+  let totalChanges = 0;
+
+  const flush = async (): Promise<void> => {
+    if (changes.length === 0) return;
+    const batch = changes.splice(0, changes.length);
+    await onFileChangeBatch(batch);
+    totalChanges += batch.length;
+    // Yield so the processor, dashboard, and signal loop remain responsive.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+
+  try {
+    for await (const fullPath of walkDirectory(watchDir, excludePatterns)) {
+      // An excluded path is present, not deleted. Remove it from the deletion set.
+      const storedToken = storedTokens.get(fullPath);
+      storedTokens.delete(fullPath);
+
+      try {
+        const stats = statSync(fullPath);
+        const currentToken = buildChangeToken(stats.mtimeMs, stats.size);
+        if (!storedToken || (!stats.isDirectory() && storedToken !== currentToken)) {
+          changes.push({
+            name: relative(watchDir, fullPath),
+            size: stats.size,
+            mtime_ms: stats.mtimeMs,
+            exists: true,
+            type: stats.isDirectory() ? 'd' : 'f',
+            new: !storedToken,
+            watchRoot: watchDir,
+            ino: stats.ino,
+          });
+        }
+      } catch {
+        // The path changed while scanning; the live watcher/reconciliation will catch it.
+      }
+
+      if (changes.length >= SCAN_BATCH_SIZE) await flush();
+    }
+  } catch (error) {
+    logger.warn(
+      `Failed to scan directory ${watchDir}: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+
+  // Only non-excluded stored paths that disappeared are remote-delete candidates.
+  for (const storedPath of storedTokens.keys()) {
+    if (isPathExcluded(storedPath, watchDir, excludePatterns)) continue;
+    changes.push({
+      name: relative(watchDir, storedPath),
+      size: 0,
+      mtime_ms: Date.now(),
+      exists: false,
+      type: 'f',
+      new: false,
+      watchRoot: watchDir,
+      ino: 0,
+    });
+    if (changes.length >= SCAN_BATCH_SIZE) await flush();
+  }
+
+  await flush();
+  return totalChanges;
+}
+
 // ============================================================================
 // Watcher Initialization
 // ============================================================================
@@ -263,16 +355,14 @@ export async function queryAllChanges(
       logger.info(`First run - syncing all existing files in ${dir.source_path}...`);
     }
 
-    // Scan the filesystem (with exclusion filtering)
-    const fsState = await scanDirectory(watchDir, excludePatterns);
-
-    // Compare and generate changes
-    const changes = compareWithStoredChangeTokens(watchDir, fsState, storedTokens);
-
-    if (changes.length > 0) {
-      await onFileChangeBatch(changes);
-      totalChanges += changes.length;
-    }
+    const directoryChanges = await queryDirectoryChanges(
+      watchDir,
+      excludePatterns,
+      storedTokens,
+      onFileChangeBatch
+    );
+    totalChanges += directoryChanges;
+    if (directoryChanges > 0) logger.info(`Queued ${directoryChanges} changes from ${watchDir}`);
   }
 
   return totalChanges;
@@ -565,16 +655,12 @@ export async function triggerFullReconciliation(
     // Get stored change tokens for this sync directory
     const storedTokens = getAllStoredChangeTokens(watchDir);
 
-    // Scan the filesystem (with exclusion filtering)
-    const fsState = await scanDirectory(watchDir, excludePatterns);
-
-    // Compare and generate changes
-    const changes = compareWithStoredChangeTokens(watchDir, fsState, storedTokens);
-
-    if (changes.length > 0) {
-      await onFileChangeBatch(changes);
-      totalChanges += changes.length;
-    }
+    totalChanges += await queryDirectoryChanges(
+      watchDir,
+      excludePatterns,
+      storedTokens,
+      onFileChangeBatch
+    );
   }
 
   logger.info(`Full reconciliation complete: ${totalChanges} changes found`);

@@ -20,6 +20,9 @@ export const STALE_PROCESSING_MS = 10 * 60 * 1000;
 /** Debounce time for file watcher events (200ms) - used for awaitWriteFinish stabilityThreshold */
 export const WATCHER_DEBOUNCE_MS = 200;
 
+/** Maximum number of filesystem changes handed to the queue at once. */
+export const SCAN_BATCH_SIZE = 200;
+
 /** Interval for background reconciliation (30 minutes) */
 export const BACKGROUND_RECONCILIATION_INTERVAL_MS = 30 * 60 * 1000;
 

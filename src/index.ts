@@ -36,6 +36,7 @@ import { statusCommand } from './cli/status.js';
 import { dashboardCommand } from './cli/dashboard.js';
 import { reconcileCommand } from './cli/reconcile.js';
 import { setupCommand } from './cli/setup.js';
+import { unlockCommand } from './cli/unlock.js';
 
 const { version } = (await import('../package.json')).default;
 
@@ -136,6 +137,8 @@ program
   .command('status')
   .description('Check if the sync service is running (JSON output)')
   .action(statusCommand);
+
+program.command('unlock').description('Safely clear a stale process lock').action(unlockCommand);
 
 program
   .command('pause')
