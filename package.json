@@ -1,13 +1,13 @@
 {
   "name": "proton-drive-sync",
-  "version": "0.3.0-nas.2",
+  "version": "0.3.0-nas.3",
   "description": "NAS-focused one-way backup to Proton Drive",
   "type": "module",
   "bin": {
     "proton-drive-sync": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc && cp -r src/db/migrations dist/db/ && mkdir -p dist/dashboard && cp src/dashboard/*.html dist/dashboard/ && cp -r src/dashboard/assets dist/dashboard/",
+    "build": "tsc && cp -r src/db/migrations dist/db/ && mkdir -p dist/dashboard && cp src/dashboard/*.html.txt dist/dashboard/ && cp -r src/dashboard/assets src/dashboard/scripts dist/dashboard/",
     "build:css": "bunx @tailwindcss/cli -i ./src/dashboard/styles/input.css -o ./src/dashboard/assets/styles.css --minify",
     "build:check": "tsc --noEmit",
     "build:bin": "bun build --compile --minify --sourcemap ./src/index.ts --outfile ./dist/proton-drive-sync",

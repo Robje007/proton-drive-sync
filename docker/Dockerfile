@@ -3,7 +3,7 @@
 # =============================================================================
 # Stage 1: Build the application
 # =============================================================================
-FROM oven/bun:1-debian AS builder
+FROM docker.io/oven/bun:1-debian AS builder
 
 WORKDIR /app
 
@@ -18,7 +18,7 @@ RUN bun run build:css && bun run build:bin
 # =============================================================================
 # Stage 2: Runtime
 # =============================================================================
-FROM debian:bookworm-slim AS runtime
+FROM docker.io/library/debian:bookworm-slim AS runtime
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \

@@ -4,47 +4,47 @@ import { Icon } from './Icon.js';
 
 export const Stats: FC<{ counts: JobCounts }> = ({ counts }) => {
   return (
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+    <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
       {/* Pending */}
-      <div class="bg-gray-800 rounded-xl p-5 border border-gray-700 shadow-sm hover:border-amber-500/50 transition-colors group relative overflow-hidden">
+      <div class="group relative overflow-hidden rounded-2xl border border-white/8 bg-white/4 p-5 shadow-sm transition-colors hover:border-violet-400/30">
         <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
           <Icon name="clock" class="w-12 h-12 text-amber-500" />
         </div>
-        <dt class="text-sm font-medium text-gray-400">Pending</dt>
-        <dd class="mt-2 text-3xl font-bold text-white group-hover:text-amber-400 transition-colors">
+        <dt class="text-xs font-medium uppercase tracking-wider text-slate-500">Waiting</dt>
+        <dd class="mt-2 text-3xl font-semibold text-white transition-colors group-hover:text-violet-300">
           {counts.pending}
         </dd>
       </div>
 
       {/* Processing */}
-      <div class="bg-gray-800 rounded-xl p-5 border border-gray-700 shadow-sm hover:border-blue-500/50 transition-colors group relative overflow-hidden">
+      <div class="group relative overflow-hidden rounded-2xl border border-white/8 bg-white/4 p-5 shadow-sm transition-colors hover:border-blue-400/30">
         <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
           <Icon name="refresh-cw" class="w-12 h-12 text-blue-500" />
         </div>
-        <dt class="text-sm font-medium text-gray-400">Processing</dt>
-        <dd class="mt-2 text-3xl font-bold text-white group-hover:text-blue-400 transition-colors">
+        <dt class="text-xs font-medium uppercase tracking-wider text-slate-500">Uploading</dt>
+        <dd class="mt-2 text-3xl font-semibold text-white transition-colors group-hover:text-blue-300">
           {counts.processing}
         </dd>
       </div>
 
       {/* Recently Synced */}
-      <div class="bg-gray-800 rounded-xl p-5 border border-gray-700 shadow-sm hover:border-green-500/50 transition-colors group relative overflow-hidden">
+      <div class="group relative overflow-hidden rounded-2xl border border-white/8 bg-white/4 p-5 shadow-sm transition-colors hover:border-emerald-400/30">
         <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
           <Icon name="check" class="w-12 h-12 text-green-500" />
         </div>
-        <dt class="text-sm font-medium text-gray-400">Recently Synced</dt>
-        <dd class="mt-2 text-3xl font-bold text-white group-hover:text-green-400 transition-colors">
+        <dt class="text-xs font-medium uppercase tracking-wider text-slate-500">Completed</dt>
+        <dd class="mt-2 text-3xl font-semibold text-white transition-colors group-hover:text-emerald-300">
           {counts.synced}
         </dd>
       </div>
 
       {/* Blocked */}
-      <div class="bg-gray-800 rounded-xl p-5 border border-gray-700 shadow-sm hover:border-red-500/50 transition-colors group relative overflow-hidden">
+      <div class="group relative overflow-hidden rounded-2xl border border-white/8 bg-white/4 p-5 shadow-sm transition-colors hover:border-rose-400/30">
         <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
           <Icon name="triangle-alert" class="w-12 h-12 text-red-500" />
         </div>
-        <dt class="text-sm font-medium text-gray-400">Blocked</dt>
-        <dd class="mt-2 text-3xl font-bold text-white group-hover:text-red-400 transition-colors">
+        <dt class="text-xs font-medium uppercase tracking-wider text-slate-500">Needs attention</dt>
+        <dd class="mt-2 text-3xl font-semibold text-white transition-colors group-hover:text-rose-300">
           {counts.blocked}
         </dd>
       </div>

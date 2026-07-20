@@ -12,6 +12,14 @@
     <script src="https://unpkg.com/idiomorph@0.3.0/dist/idiomorph-ext.min.js"></script>
   </head>
   <body class="min-h-full flex flex-col bg-slate-950" hx-ext="sse" sse-connect="/api/events">
+    <div class="pointer-events-none fixed inset-0 z-0 overflow-hidden" aria-hidden="true">
+      <div
+        class="absolute -left-48 -top-48 h-[34rem] w-[34rem] rounded-full bg-violet-600/10 blur-3xl"
+      ></div>
+      <div
+        class="absolute -right-52 top-1/3 h-[30rem] w-[30rem] rounded-full bg-cyan-500/5 blur-3xl"
+      ></div>
+    </div>
     <div id="dry-run-banner" hx-swap="outerHTML" sse-swap="dry-run-banner">
       {{DRY_RUN_BANNER_CONTENT}}
     </div>
@@ -24,18 +32,31 @@
       hx-on::after-swap="document.body.dispatchEvent(new CustomEvent('heartbeat-received'))"
     ></div>
 
-    <header class="sticky top-0 z-50 border-b border-white/10 bg-slate-950/90 backdrop-blur-xl">
-      <div class="mx-auto flex h-18 max-w-7xl items-center justify-between gap-4 px-4 sm:px-6">
+    <header class="sticky top-0 z-50 border-b border-white/8 bg-slate-950/85 backdrop-blur-xl">
+      <div
+        class="mx-auto flex min-h-18 max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:px-6"
+      >
         <div class="flex min-w-0 items-center gap-6">
-          <a href="/" class="flex shrink-0 items-center gap-3">
-            <img src="/assets/icon.svg" alt="Proton NAS Sync" class="h-10 w-10 rounded-xl" />
+          <a href="/" class="group flex shrink-0 items-center gap-3">
+            <span
+              class="relative grid h-10 w-10 place-items-center overflow-hidden rounded-xl border border-violet-300/20 bg-gradient-to-br from-violet-500 to-indigo-700 shadow-lg shadow-violet-950/40"
+            >
+              <img
+                src="/assets/icon.svg"
+                alt=""
+                class="h-8 w-8 transition-transform group-hover:scale-105"
+              />
+            </span>
             <div class="header-title">
               <p class="text-sm font-semibold tracking-wide text-white">Proton NAS Sync</p>
-              <p class="text-[11px] text-slate-500">Unofficial community fork</p>
+              <p class="text-[11px] text-violet-300/70">Backup cockpit</p>
             </div>
           </a>
 
-          <nav class="flex items-center gap-1 rounded-xl border border-white/8 bg-white/4 p-1">
+          <nav
+            aria-label="Main navigation"
+            class="flex items-center gap-1 rounded-xl border border-white/8 bg-white/4 p-1 shadow-inner shadow-black/20"
+          >
             <a
               href="/"
               class="{{HIDE_TABS_DURING_ONBOARDING}} flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors {{HOME_TAB_CLASS}}"
@@ -80,7 +101,7 @@
       </div>
     </header>
 
-    <main class="custom-scrollbar flex-1 overflow-y-auto px-4 py-8 sm:px-6 lg:py-10">
+    <main class="custom-scrollbar relative z-10 flex-1 overflow-y-auto px-4 py-7 sm:px-6 lg:py-9">
       {{CONTENT}}
     </main>
 
