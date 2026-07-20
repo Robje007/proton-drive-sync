@@ -70,6 +70,7 @@ import { NoSyncDirsModal } from './views/fragments/NoSyncDirsModal.js';
 import { StartOnLoginSection } from './views/fragments/StartOnLoginSection.js';
 import { WelcomeModal } from './views/fragments/WelcomeModal.js';
 import { icon } from './views/fragments/Icon.js';
+import { createOrderedWriter } from './sse-writer.js';
 
 // Embed HTML templates at compile time as text (required for compiled binaries)
 import layoutHtml from './layout.html.txt';
@@ -107,10 +108,8 @@ export const FRAG = {
   auth: 'auth',
   paused: 'paused',
   syncing: 'syncing',
-  processingTitle: 'processing-title',
   stopSection: 'stop-section',
   controlsPauseButton: 'controls-pause-button',
-  pauseButton: 'pause-button',
   dryRunBanner: 'dry-run-banner',
   configInfo: 'config-info',
   welcomeModal: 'welcome-modal',
@@ -453,29 +452,6 @@ function renderDryRunBanner(dryRun: boolean): string {
 </div>`;
 }
 
-/** Render processing box title based on pause state, auth status, and syncing status */
-function renderProcessingTitle(isPaused: boolean): string {
-  if (currentAuthStatus.status !== 'authenticated' || currentSyncStatus !== 'syncing') {
-    return `
-<span class="w-2 h-2 rounded-full bg-amber-500"></span>
-Held Transfers
-<div class="relative group">
-  ${icon('info', 'w-4 h-4 text-gray-500 cursor-help')}
-  <div class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg text-xs text-gray-300 w-80 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10 normal-case font-normal">
-    Transfers are held until you authenticate and syncing starts
-  </div>
-</div>`;
-  }
-  if (isPaused) {
-    return `
-<span class="w-2 h-2 rounded-full bg-amber-500"></span>
-Paused Transfers`;
-  }
-  return `
-<span class="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
-Active Transfers`;
-}
-
 /** Render a single log line as HTML */
 function renderLogLine(line: string): string {
   let level = 20;
@@ -621,14 +597,10 @@ export function renderFragment(key: FragmentKey, s: DashboardSnapshot): string {
       return renderPausedBadge(s.syncStatus === 'paused');
     case FRAG.syncing:
       return renderSyncingBadge(s.syncStatus);
-    case FRAG.processingTitle:
-      return renderProcessingTitle(s.syncStatus === 'paused');
     case FRAG.stopSection:
       return renderStopSection(s.syncStatus);
     case FRAG.controlsPauseButton:
       return renderControlsPauseButton(s.syncStatus);
-    case FRAG.pauseButton:
-      return renderPauseButton(s.syncStatus);
     case FRAG.dryRunBanner:
       return renderDryRunBanner(s.dryRun);
     case FRAG.configInfo:
@@ -1392,42 +1364,28 @@ app.get('/api/auth', (c) => {
 // SSE Endpoints - Send HTML Fragments
 // ============================================================================
 
-/** Push multiple fragments to an SSE stream in one go */
-function pushFragments(
-  stream: { writeSSE: (msg: { event: string; data: string }) => void },
+/** Push fragments in order so morph updates cannot overtake one another. */
+async function pushFragments(
+  stream: { writeSSE: (msg: { event: string; data: string }) => Promise<void> },
   s: DashboardSnapshot,
   keys: FragmentKey[]
-) {
+): Promise<void> {
   for (const key of keys) {
-    stream.writeSSE({ event: key, data: renderFragment(key, s) });
+    await stream.writeSSE({ event: key, data: renderFragment(key, s) });
   }
-}
-
-/** Get a comparable string of processing job IDs for change detection */
-function processingIds(jobs: DashboardJob[]): string {
-  return jobs
-    .map((j) => j.id)
-    .sort((a, b) => a - b)
-    .join(',');
 }
 
 // GET /api/events - SSE stream of HTML fragment updates
 app.get('/api/events', async (c) => {
   return streamSSE(c, async (stream) => {
-    // Track processing jobs to avoid unnecessary re-renders
-    let lastProcessing = '';
-
     // Initial full push - get full state from DB
     const initialSnapshot = snapshot();
-    lastProcessing = processingIds(initialSnapshot.processing);
 
-    pushFragments(stream, initialSnapshot, [
+    await pushFragments(stream, initialSnapshot, [
       FRAG.stats,
       FRAG.auth,
       FRAG.paused,
       FRAG.syncing,
-      FRAG.processingTitle,
-      FRAG.pauseButton,
       FRAG.controlsPauseButton,
       FRAG.processingQueue,
       FRAG.blockedQueue,
@@ -1443,28 +1401,29 @@ app.get('/api/events', async (c) => {
     // Debounce pushing fragments to the SSE stream
     const FRAGMENT_DEBOUNCE_MS = 100;
     let fragmentDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const orderedWriter = createOrderedWriter();
+
+    // EventEmitter callbacks are synchronous. Keep their async SSE writes on one
+    // chain, preserving the order in which status and queue changes occurred.
+    const enqueueWrite = (write: () => Promise<void>) => {
+      void orderedWriter.enqueue(write);
+    };
 
     const flushFragments = () => {
       fragmentDebounceTimer = null;
-
-      // Query fresh state from DB
-      const s = snapshot();
-      const curProcessing = processingIds(s.processing);
-
-      // Always push stats & all queues
-      pushFragments(stream, s, [
-        FRAG.stats,
-        FRAG.blockedQueue,
-        FRAG.pendingQueue,
-        FRAG.recentQueue,
-        FRAG.retryQueue,
-      ]);
-
-      // Only push processing queue if changed
-      if (curProcessing !== lastProcessing) {
-        lastProcessing = curProcessing;
-        pushFragments(stream, s, [FRAG.processingQueue]);
-      }
+      enqueueWrite(async () => {
+        // Render both sides of the work queue from the same fresh snapshot.
+        // A job moving from pending to processing can no longer leave a stale card.
+        const s = snapshot();
+        await pushFragments(stream, s, [
+          FRAG.stats,
+          FRAG.pendingQueue,
+          FRAG.processingQueue,
+          FRAG.blockedQueue,
+          FRAG.recentQueue,
+          FRAG.retryQueue,
+        ]);
+      });
     };
 
     // Job refresh: debounce fragment push (queries DB fresh each time)
@@ -1477,27 +1436,27 @@ app.get('/api/events', async (c) => {
 
     // Status change: push status-related fragments
     const onStatus = (status: DashboardStatus) => {
-      const s: DashboardSnapshot = {
-        ...snapshot(),
-        auth: status.auth,
-        syncStatus: status.syncStatus,
-      };
-      pushFragments(stream, s, [
-        FRAG.auth,
-        FRAG.paused,
-        FRAG.syncing,
-        FRAG.processingTitle,
-        FRAG.pauseButton,
-        FRAG.controlsPauseButton,
-        FRAG.stopSection,
-        FRAG.processingQueue, // Re-render to update spinners when paused/resumed
-        FRAG.welcomeModal,
-      ]);
-      stream.writeSSE({ event: 'heartbeat', data: '' });
+      enqueueWrite(async () => {
+        const s: DashboardSnapshot = {
+          ...snapshot(),
+          auth: status.auth,
+          syncStatus: status.syncStatus,
+        };
+        await pushFragments(stream, s, [
+          FRAG.auth,
+          FRAG.paused,
+          FRAG.syncing,
+          FRAG.controlsPauseButton,
+          FRAG.stopSection,
+          FRAG.processingQueue, // Re-render header and spinners as one unit
+          FRAG.welcomeModal,
+        ]);
+        await stream.writeSSE({ event: 'heartbeat', data: '' });
+      });
     };
 
     const onHeartbeat = () => {
-      stream.writeSSE({ event: 'heartbeat', data: '' });
+      enqueueWrite(() => stream.writeSSE({ event: 'heartbeat', data: '' }));
     };
 
     stateDiffEvents.on('job_refresh', onJobRefresh);
@@ -1505,6 +1464,7 @@ app.get('/api/events', async (c) => {
     heartbeatEvents.on('heartbeat', onHeartbeat);
 
     stream.onAbort(() => {
+      orderedWriter.close();
       if (fragmentDebounceTimer) clearTimeout(fragmentDebounceTimer);
       stateDiffEvents.off('job_refresh', onJobRefresh);
       statusEvents.off('status', onStatus);

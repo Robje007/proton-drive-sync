@@ -15,35 +15,44 @@ export const PendingQueue: FC<Props> = ({ jobs, count, limit }) => {
 
   return (
     <>
-      {/* Header */}
-      <div class="px-5 py-4 border-b border-gray-700 flex justify-between items-center bg-gray-800/50 backdrop-blur rounded-t-xl">
-        <h2 class="text-sm font-semibold text-gray-100 uppercase tracking-wider flex items-center gap-2">
-          <span class="w-2 h-2 rounded-full bg-amber-500"></span>
-          Pending
-        </h2>
-        <div class="flex items-center gap-3">
-          <div class="h-7"></div>
-          <span class="text-xs font-mono text-gray-500">{count} items</span>
+      <div class="flex min-h-[72px] items-center justify-between gap-3 border-b border-white/8 bg-white/3 px-5 py-4">
+        <div>
+          <h2 class="flex items-center gap-2 text-sm font-semibold text-white">
+            <span class="h-2 w-2 rounded-full bg-violet-400"></span>
+            Up next
+          </h2>
+          <p class="mt-1 text-xs text-slate-500">Ready and waiting for an upload slot</p>
+        </div>
+        <div class="flex shrink-0 items-center gap-3">
+          <span class="text-[10px] font-medium uppercase tracking-wider text-slate-600">Live</span>
+          <span class="rounded-full bg-violet-400/10 px-2.5 py-1 text-xs font-semibold text-violet-300">
+            {count}
+          </span>
         </div>
       </div>
 
       {/* List */}
-      <div class="flex-1 overflow-y-auto custom-scrollbar p-2">
+      <div class="custom-scrollbar flex-1 overflow-y-auto p-3">
         {displayJobs.length === 0 ? (
           <div class="h-full flex flex-col items-center justify-center text-gray-500 space-y-2">
-            <p class="text-sm">Queue empty</p>
+            <Icon name="circle-check" class="h-10 w-10 opacity-20" />
+            <p class="text-sm font-medium text-slate-400">All caught up</p>
+            <p class="text-xs text-slate-600">There are no files waiting to upload.</p>
           </div>
         ) : (
           <div class="space-y-1">
             {displayJobs.map((job) => (
               <div
                 id={`pending-${job.id}`}
-                class="px-3 py-2 rounded-lg hover:bg-gray-700/50 transition-colors flex items-center gap-3"
+                class="flex items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 transition-colors hover:border-white/8 hover:bg-white/4"
               >
                 <Icon name="clock" class="w-4 h-4 text-amber-500 shrink-0" />
                 <div class="min-w-0 flex-1">
-                  <span class="text-xs font-mono text-gray-300 truncate block">
+                  <span class="block truncate text-xs font-medium text-slate-300">
                     {formatPath(job.localPath)}
+                  </span>
+                  <span class="mt-0.5 block truncate font-mono text-[10px] text-slate-600">
+                    {job.remotePath}
                   </span>
                 </div>
               </div>

@@ -5,7 +5,7 @@
  */
 
 import { EventEmitter } from 'events';
-import { eq, and, lte, lt, inArray, isNull, sql, desc } from 'drizzle-orm';
+import { eq, and, lte, lt, inArray, isNull, sql, asc, desc } from 'drizzle-orm';
 import { db, schema, run, type Tx } from '../db/index.js';
 import { SyncJobStatus, SyncEventType } from '../db/schema.js';
 import { logger, isDebugEnabled } from '../logger.js';
@@ -700,6 +700,7 @@ export function getProcessingJobs() {
     })
     .from(schema.syncJobs)
     .where(eq(schema.syncJobs.status, SyncJobStatus.PROCESSING))
+    .orderBy(asc(schema.syncJobs.id))
     .all();
 }
 
@@ -719,7 +720,7 @@ export function getPendingJobs() {
     .where(
       and(eq(schema.syncJobs.status, SyncJobStatus.PENDING), lte(schema.syncJobs.retryAt, now))
     )
-    .orderBy(schema.syncJobs.retryAt)
+    .orderBy(asc(schema.syncJobs.retryAt), asc(schema.syncJobs.id))
     .all();
 }
 

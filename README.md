@@ -333,18 +333,30 @@ sudo docker logs --tail 100 -f proton-drive-sync
 
 ## Updating the container
 
-With `pull_policy: always` configured:
+An update does not require re-authentication. Keep the existing volume declarations, volume names,
+`KEYRING_PASSWORD`, and bind mounts exactly as they are. Change only the image line in the Compose
+YAML:
+
+```yaml
+image: ghcr.io/robje007/proton-drive-sync:0.3.0-nas.3
+```
+
+Then run these commands from the directory containing the Compose YAML:
 
 ```bash
-sudo docker compose pull
-sudo docker compose up -d
+sudo docker pull ghcr.io/robje007/proton-drive-sync:0.3.0-nas.3
+sudo docker compose up -d --no-deps --force-recreate proton-drive-sync
 sudo docker logs --tail 100 -f proton-drive-sync
 ```
 
-Named volumes are preserved. Pin a release rather than `latest` if reproducibility matters:
+Pulling explicitly also works when an older Ugreen Compose file contains `pull_policy: never`.
+`docker compose up` replaces only the container; the named config and state volumes remain intact.
+Do not run `docker compose down -v`, because `-v` deletes named volumes.
 
-```yaml
-image: ghcr.io/robje007/proton-drive-sync:0.3.0-nas.2
+Verify the mounts after the update if desired:
+
+```bash
+sudo docker inspect proton-drive-sync --format '{{range .Mounts}}{{println .Destination "<-" .Name .Source}}{{end}}'
 ```
 
 ## Ugreen and restricted NAS kernels

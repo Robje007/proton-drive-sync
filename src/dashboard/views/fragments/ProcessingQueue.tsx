@@ -1,5 +1,4 @@
 import type { FC } from 'hono/jsx';
-import { raw } from 'hono/html';
 import type { DashboardJob, SyncStatus, AuthStatusUpdate } from './types.js';
 import { PauseButton } from './PauseButton.js';
 import { formatPath } from './utils.js';
@@ -16,43 +15,48 @@ type Props = {
 export const ProcessingQueue: FC<Props> = ({ jobs, count, syncStatus, authStatus, limit }) => {
   const isPaused = syncStatus === 'paused';
   const isActive = syncStatus === 'syncing' && authStatus.status === 'authenticated';
+  const title = isPaused ? 'Transfers paused' : isActive ? 'Uploading now' : 'Transfers on hold';
+  const subtitle = isPaused
+    ? 'Resume sync when you are ready'
+    : isActive
+      ? 'Files currently moving to Proton Drive'
+      : 'Waiting for a connection and authenticated account';
+  const statusDot = isPaused || !isActive ? 'bg-amber-500' : 'bg-blue-500 animate-pulse';
   const displayJobs = jobs.slice(0, limit);
   const isTruncated = jobs.length > limit;
 
   return (
     <>
-      {/* Header */}
-      <div class="px-5 py-4 border-b border-gray-700 flex justify-between items-center bg-gray-800/50 backdrop-blur rounded-t-xl">
-        <h2
-          id="processing-title"
-          class="text-sm font-semibold text-gray-100 uppercase tracking-wider flex items-center gap-2"
-          sse-swap="processing-title"
-          hx-swap="innerHTML"
-        >
-          <span
-            class={`w-2 h-2 rounded-full ${isPaused ? 'bg-amber-500' : 'bg-blue-500 animate-pulse'}`}
-          ></span>
-          {isPaused ? 'Paused' : 'Active Transfers'}
-        </h2>
-        <div class="flex items-center gap-3">
-          <div id="pause-button">{raw(PauseButton({ syncStatus }))}</div>
-          <span class="text-xs font-mono text-gray-500">{count} items</span>
+      <div class="flex min-h-[72px] items-center justify-between gap-3 border-b border-white/8 bg-white/3 px-5 py-4">
+        <div>
+          <h2 class="flex items-center gap-2 text-sm font-semibold text-white">
+            <span class={`h-2 w-2 rounded-full ${statusDot}`}></span>
+            {title}
+          </h2>
+          <p class="mt-1 text-xs text-slate-500">{subtitle}</p>
+        </div>
+        <div class="flex shrink-0 items-center gap-3">
+          {PauseButton({ syncStatus })}
+          <span class="rounded-full bg-blue-400/10 px-2.5 py-1 text-xs font-semibold text-blue-300">
+            {count}
+          </span>
         </div>
       </div>
 
       {/* List */}
-      <div class="flex-1 overflow-y-auto custom-scrollbar p-2">
+      <div class="custom-scrollbar flex-1 overflow-y-auto p-3">
         {displayJobs.length === 0 ? (
           <div class="h-full flex flex-col items-center justify-center text-gray-500 space-y-2">
             <Icon name="zap" class="w-10 h-10 opacity-20" />
-            <p class="text-sm">Queue is empty</p>
+            <p class="text-sm font-medium text-slate-400">Nothing uploading right now</p>
+            <p class="text-xs text-slate-600">New changes will appear here automatically.</p>
           </div>
         ) : (
           <div class="space-y-1">
             {displayJobs.map((job) => (
               <div
                 id={`processing-${job.id}`}
-                class="px-3 py-2.5 rounded-lg bg-gray-900/50 border border-gray-700/50 hover:border-blue-500/30 transition-colors group"
+                class="group rounded-xl border border-blue-400/15 bg-blue-400/5 px-3 py-3 transition-colors hover:border-blue-400/35"
               >
                 <div class="flex items-start gap-3">
                   {isActive ? (
@@ -61,10 +65,12 @@ export const ProcessingQueue: FC<Props> = ({ jobs, count, syncStatus, authStatus
                     <Icon name="clock" class="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
                   )}
                   <div class="min-w-0 flex-1">
-                    <div class="text-xs font-mono text-gray-300 truncate">
+                    <div class="truncate text-xs font-medium text-slate-200">
                       {formatPath(job.localPath)}
                     </div>
-                    <div class="text-[10px] text-gray-500 mt-0.5 truncate">{job.localPath}</div>
+                    <div class="mt-1 truncate font-mono text-[10px] text-slate-500">
+                      {job.localPath}
+                    </div>
                   </div>
                 </div>
               </div>
